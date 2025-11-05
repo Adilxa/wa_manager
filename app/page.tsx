@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import {
   Plus,
   QrCode,
@@ -31,12 +32,21 @@ interface Account {
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
 
 export default function Dashboard() {
+  const router = useRouter();
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [loading, setLoading] = useState(true);
   const [newAccountName, setNewAccountName] = useState('');
   const [selectedAccount, setSelectedAccount] = useState<Account | null>(null);
   const [refreshInterval, setRefreshInterval] = useState<NodeJS.Timeout | null>(null);
   const [sending, setSending] = useState(false);
+
+  // Проверка авторизации
+  useEffect(() => {
+    const isAuth = localStorage.getItem('wa_manager_auth');
+    if (!isAuth) {
+      router.push('/login');
+    }
+  }, [router]);
 
   // Загрузка аккаунтов
   const loadAccounts = async () => {
@@ -165,15 +175,29 @@ export default function Dashboard() {
     );
   }
 
+  const handleLogout = () => {
+    localStorage.removeItem('wa_manager_auth');
+    router.push('/login');
+  };
+
   return (
     <div className="min-h-screen bg-black text-white">
       <div className="max-w-7xl mx-auto px-4 py-8">
         {/* Header */}
-        <div className="mb-10">
-          <h1 className="text-4xl font-bold bg-gradient-to-r from-white to-gray-400 bg-clip-text text-transparent">
-            WhatsApp Manager
-          </h1>
-          <p className="text-gray-400 mt-2">Manage multiple WhatsApp accounts with ease</p>
+        <div className="mb-10 flex items-start justify-between">
+          <div>
+            <h1 className="text-4xl font-bold bg-gradient-to-r from-white to-gray-400 bg-clip-text text-transparent">
+              WhatsApp Manager
+            </h1>
+            <p className="text-gray-400 mt-2">Manage multiple WhatsApp accounts with ease</p>
+          </div>
+          <button
+            onClick={handleLogout}
+            className="flex items-center gap-2 px-4 py-2 bg-gray-900 border border-gray-800 rounded-lg text-gray-400 hover:text-white hover:border-gray-700 transition"
+          >
+            <LogOut className="w-4 h-4" />
+            Logout
+          </button>
         </div>
 
         {/* Create Account */}
