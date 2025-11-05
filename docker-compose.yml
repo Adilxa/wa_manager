@@ -1,0 +1,62 @@
+version: '3.8'
+
+services:
+  wa-manager:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: wa-manager
+    restart: unless-stopped
+
+    ports:
+      - "6000:3000"    # Next.js UI
+      - "6001:5001"    # WhatsApp API
+
+    environment:
+      # Database
+      DATABASE_URL: ${DATABASE_URL}
+      DIRECT_URL: ${DIRECT_URL}
+
+      # Next.js
+      NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-http://localhost:6000}
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:6001}
+
+      # API Port
+      API_PORT: 5001
+
+      # Security
+      API_SECRET_KEY: ${API_SECRET_KEY}
+
+      # Node
+      NODE_ENV: production
+
+    volumes:
+      # Персистентное хранилище для WhatsApp сессий
+      - wa_sessions:/app/.wwebjs_auth
+      - wa_cache:/app/.wwebjs_cache
+      - wa_logs:/app/logs
+
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+    # Ограничения ресурсов (опционально)
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '1.0'
+          memory: 1G
+
+volumes:
+  wa_sessions:
+    driver: local
+  wa_cache:
+    driver: local
+  wa_logs:
+    driver: local

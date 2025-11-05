@@ -1,0 +1,60 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model WhatsAppAccount {
+  id          String   @id @default(cuid())
+  name        String
+  phoneNumber String?  @unique
+  status      AccountStatus @default(DISCONNECTED)
+  qrCode      String?  @db.Text
+  sessionData String?  @db.Text
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  messages    Message[]
+
+  @@index([status])
+  @@map("whatsapp_accounts")
+}
+
+model Message {
+  id        String   @id @default(cuid())
+  accountId String
+  account   WhatsAppAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  to        String
+  message   String   @db.Text
+  status    MessageStatus @default(PENDING)
+
+  sentAt    DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([accountId])
+  @@index([status])
+  @@index([sentAt])
+  @@map("messages")
+}
+
+enum AccountStatus {
+  DISCONNECTED
+  CONNECTING
+  QR_READY
+  AUTHENTICATING
+  CONNECTED
+  FAILED
+}
+
+enum MessageStatus {
+  PENDING
+  SENT
+  DELIVERED
+  READ
+  FAILED
+}
