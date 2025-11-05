@@ -6,13 +6,8 @@ const nextConfig: NextConfig = {
       bodySizeLimit: '2mb',
     },
   },
-  serverExternalPackages: ['puppeteer', 'puppeteer-core'],
-  webpack: (config, { isServer }) => {
-    if (isServer) {
-      config.externals.push('puppeteer', 'puppeteer-core');
-    }
-    return config;
-  },
+  serverExternalPackages: ['puppeteer', 'puppeteer-core', 'whatsapp-web.js'],
+  turbopack: {},
 };
 
 export default nextConfig;
