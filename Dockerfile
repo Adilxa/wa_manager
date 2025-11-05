@@ -1,7 +1,7 @@
 # Multi-stage build для оптимизации размера образа
 
 # Stage 1: Build Next.js
-FROM node:18-alpine AS nextjs-builder
+FROM node:20-alpine AS nextjs-builder
 WORKDIR /app
 
 # Копируем package files
@@ -18,7 +18,7 @@ RUN npx prisma generate
 RUN npm run build
 
 # Stage 2: Production image
-FROM node:18-slim AS production
+FROM node:20-slim AS production
 
 # Установка зависимостей для Puppeteer
 RUN apt-get update && apt-get install -y \
@@ -67,7 +67,7 @@ WORKDIR /app
 COPY package*.json ./
 
 # Устанавливаем только production зависимости
-RUN npm ci --only=production
+RUN npm ci --omit=dev --maxsockets=1
 
 # Копируем собранный Next.js из builder stage
 COPY --from=nextjs-builder /app/.next ./.next

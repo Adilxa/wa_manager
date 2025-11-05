@@ -1,7 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "Bash(.env.example)"
+      "Bash(.env.example)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)"
     ],
     "deny": [],
     "ask": []
