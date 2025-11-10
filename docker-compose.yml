@@ -1,10 +1,37 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: wa-postgres
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: wa_manager
+      PGDATA: /var/lib/postgresql/data/pgdata
+
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+    ports:
+      - "5432:5432"
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   wa-manager:
     build:
       context: .
       dockerfile: Dockerfile
     container_name: wa-manager
     restart: unless-stopped
+
+    depends_on:
+      postgres:
+        condition: service_healthy
 
     ports:
       - "3000:3000"    # Next.js UI
@@ -52,6 +79,8 @@ services:
           memory: 1G
 
 volumes:
+  postgres_data:
+    driver: local
   wa_sessions:
     driver: local
   wa_cache:

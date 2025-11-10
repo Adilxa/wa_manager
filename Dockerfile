@@ -28,4 +28,4 @@ RUN addgroup -g 1001 -S nodejs && adduser -S nodejs -u 1001 && \
 
 USER nodejs
 EXPOSE 3000 5001
-CMD ["sh", "-c", "node server/index.js & npx next start"]
+CMD ["sh", "-c", "npx prisma migrate deploy && node server/index.js & npx next start"]

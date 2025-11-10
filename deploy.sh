@@ -1,143 +1,163 @@
 #!/bin/bash
 
-# !:@8?B 02B><0B8G5A:>3> 45?;>O WhatsApp Manager =0 VPS Ubuntu
-# A?>;L7>20=85: bash deploy.sh
+# Скрипт автоматического деплоя WhatsApp Manager на VPS Ubuntu
+# Использование: bash deploy.sh
 
-set -e  # @5@20BL 2K?>;=5=85 ?@8 ;N1>9 >H81:5
+set -e  # Прервать выполнение при любой ошибке
 
 echo "================================"
 echo "WhatsApp Manager - Deployment"
 echo "================================"
 echo ""
 
-# @>25@:0 =0;8G8O Docker
+# Проверка наличия Docker
 if ! command -v docker &> /dev/null; then
-    echo "Docker =5 CAB0=>2;5=. #AB0=02;8205<..."
+    echo "Docker не установлен. Устанавливаем..."
     curl -fsSL https://get.docker.com -o get-docker.sh
     sudo sh get-docker.sh
     sudo usermod -aG docker $USER
     rm get-docker.sh
-    echo "Docker CAB0=>2;5=!"
+    echo "✓ Docker установлен!"
 else
-    echo " Docker C65 CAB0=>2;5="
+    echo "✓ Docker уже установлен"
 fi
 
-# @>25@:0 =0;8G8O Docker Compose
+# Проверка наличия Docker Compose
 if ! command -v docker-compose &> /dev/null; then
-    echo "Docker Compose =5 CAB0=>2;5=. #AB0=02;8205<..."
+    echo "Docker Compose не установлен. Устанавливаем..."
     sudo apt-get update
     sudo apt-get install -y docker-compose-plugin
-    echo "Docker Compose CAB0=>2;5=!"
+    echo "✓ Docker Compose установлен!"
 else
-    echo " Docker Compose C65 CAB0=>2;5="
+    echo "✓ Docker Compose уже установлен"
 fi
 
 echo ""
 echo "================================"
-echo "0AB@>9:0 ?5@5<5==KE >:@C65=8O"
+echo "Настройка переменных окружения"
 echo "================================"
 
-# @>25@:0 =0;8G8O .env D09;0
+# Проверка наличия .env файла
 if [ ! -f .env ]; then
-    echo "$09; .env =5 =0945=. !>7405< 87 .env.example..."
+    echo "⚠ Файл .env не найден. Создаем из .env.example..."
 
     if [ -f .env.example ]; then
         cp .env.example .env
         echo ""
-        echo "�  : B@540:B8@C9B5 D09; .env ?5@54 ?@>4>;65=85<!"
-        echo "   5>1E>48<> =0AB@>8BL:"
-        echo "   - DATABASE_URL (?>4:;NG5=85 : PostgreSQL)"
-        echo "   - DIRECT_URL (?@O<>5 ?>4:;NG5=85 : PostgreSQL)"
-        echo "   - NEXT_PUBLIC_APP_URL (?C1;8G=K9 URL 20H53> ?@8;>65=8O)"
-        echo "   - NEXT_PUBLIC_API_URL (?C1;8G=K9 URL 20H53> API)"
-        echo "   - API_SECRET_KEY (A;CG09=K9 A5:@5B=K9 :;NG)"
+        echo "⚠ ВАЖНО: Отредактируйте файл .env перед продолжением!"
+        echo "   Необходимо настроить:"
+        echo "   - NEXT_PUBLIC_APP_URL (публичный URL вашего приложения)"
+        echo "   - NEXT_PUBLIC_API_URL (публичный URL вашего API)"
+        echo "   - API_SECRET_KEY (случайный секретный ключ)"
         echo ""
-        read -p "06<8B5 Enter ?>A;5 @540:B8@>20=8O .env D09;0..."
+        echo "   Для локальной БД PostgreSQL можно оставить DATABASE_URL как есть"
+        echo ""
+        read -p "Нажмите Enter после редактирования .env файла..."
     else
-        echo "L $09; .env.example =5 =0945=!"
+        echo "❌ Файл .env.example не найден!"
         exit 1
     fi
 else
-    echo " $09; .env =0945="
+    echo "✓ Файл .env найден"
 fi
 
 echo ""
 echo "================================"
-echo "AB0=>2:0 AB0@KE :>=B59=5@>2"
+echo "Остановка старых контейнеров"
 echo "================================"
 
-# AB0=02;8205< 8 C40;O5< AB0@K5 :>=B59=5@K
-if [ "$(docker ps -q -f name=wa-manager)" ]; then
-    echo "AB0=02;8205< @01>B0NI85 :>=B59=5@K..."
+# Останавливаем и удаляем старые контейнеры
+if [ "$(docker ps -q -f name=wa-manager)" ] || [ "$(docker ps -q -f name=wa-postgres)" ]; then
+    echo "Останавливаем работающие контейнеры..."
     docker-compose down
 else
-    echo " 5B @01>B0NI8E :>=B59=5@>2"
+    echo "✓ Нет работающих контейнеров"
 fi
 
 echo ""
 echo "================================"
-echo "!1>@:0 8 70?CA: :>=B59=5@>2"
+echo "Сборка и запуск контейнеров"
 echo "================================"
 
-# !>18@05< 8 70?CA:05< :>=B59=5@K
-echo "!>18@05< Docker >1@07..."
+# Собираем и запускаем контейнеры
+echo "Собираем Docker образ..."
 docker-compose build --no-cache
 
-echo "0?CA:05< :>=B59=5@K..."
+echo "Запускаем контейнеры (PostgreSQL + WhatsApp Manager)..."
 docker-compose up -d
 
 echo ""
 echo "================================"
-echo "@>25@:0 AB0BCA0"
+echo "Проверка статуса"
 echo "================================"
 
-# 45< =5A:>;L:> A5:C=4 4;O 70?CA:0 :>=B59=5@>2
-sleep 5
+# Ждем несколько секунд для запуска контейнеров
+echo "Ожидание запуска контейнеров (15 секунд)..."
+sleep 15
 
-# @>25@O5< AB0BCA :>=B59=5@>2
+# Проверяем статус контейнеров
+echo ""
+echo "Статус контейнеров:"
 docker-compose ps
 
 echo ""
+echo "Проверка PostgreSQL..."
+if docker-compose exec -T postgres pg_isready -U postgres > /dev/null 2>&1; then
+    echo "✓ PostgreSQL работает"
+else
+    echo "⚠ PostgreSQL еще запускается..."
+fi
+
+echo ""
 echo "================================"
-echo "0AB@>9:0 Firewall (UFW)"
+echo "Настройка Firewall (UFW)"
 echo "================================"
 
 if command -v ufw &> /dev/null; then
-    echo "B:@K205< =5>1E>48<K5 ?>@BK..."
+    echo "Открываем необходимые порты..."
     sudo ufw allow 22/tcp      # SSH
     sudo ufw allow 80/tcp      # HTTP
     sudo ufw allow 443/tcp     # HTTPS
-    sudo ufw allow 6000/tcp    # Next.js UI
-    sudo ufw allow 6001/tcp    # WhatsApp API
+    sudo ufw allow 3000/tcp    # Next.js UI
+    sudo ufw allow 5001/tcp    # WhatsApp API
+    sudo ufw allow 5432/tcp    # PostgreSQL (для внешних подключений)
 
-    # :B828@C5< UFW 5A;8 =5 0:B825=
+    # Активируем UFW если не активен
     sudo ufw --force enable
 
-    echo " Firewall =0AB@>5="
+    echo "✓ Firewall настроен"
     sudo ufw status
 else
-    echo "�  UFW =5 CAB0=>2;5=.  5:><5=4C5BAO CAB0=>28BL 4;O 157>?0A=>AB8:"
+    echo "⚠ UFW не установлен. Рекомендуется установить для безопасности:"
     echo "   sudo apt-get install ufw"
 fi
 
 echo ""
 echo "================================"
-echo "5?;>9 7025@H5=!"
+echo "Деплой завершен!"
 echo "================================"
 echo ""
-echo "@8;>65=85 4>ABC?=> ?> 04@5A0<:"
-echo "  UI:  http://$(hostname -I | awk '{print $1}'):6000"
-echo "  API: http://$(hostname -I | awk '{print $1}'):6001"
+echo "Приложение доступно по адресам:"
+echo "  UI:  http://$(hostname -I | awk '{print $1}'):3000"
+echo "  API: http://$(hostname -I | awk '{print $1}'):5001"
+echo "  DB:  postgresql://postgres:postgres@$(hostname -I | awk '{print $1}'):5432/wa_manager"
 echo ""
-echo ";O ?@>A<>B@0 ;>3>2:"
+echo "Для просмотра логов:"
 echo "  docker-compose logs -f"
 echo ""
-echo ";O >AB0=>2:8:"
+echo "Логи конкретных сервисов:"
+echo "  docker-compose logs -f wa-manager"
+echo "  docker-compose logs -f postgres"
+echo ""
+echo "Для остановки:"
 echo "  docker-compose down"
 echo ""
-echo ";O ?5@570?CA:0:"
+echo "Для перезапуска:"
 echo "  docker-compose restart"
 echo ""
-echo "�   5:><5=4C5BAO =0AB@>8BL Nginx A SSL 4;O production!"
-echo "   !<. 8=AB@C:F8N 2 DEPLOY.md"
+echo "⚠ РЕКОМЕНДАЦИИ ДЛЯ PRODUCTION:"
+echo "   1. Измените пароль PostgreSQL в docker-compose.yml"
+echo "   2. Используйте сильный API_SECRET_KEY в .env"
+echo "   3. Настройте Nginx с SSL (см. README-DEPLOY.md)"
+echo "   4. Настройте регулярное резервное копирование БД"
 echo ""
