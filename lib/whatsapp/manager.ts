@@ -94,15 +94,14 @@ class WhatsAppManager {
     // Настраиваем обработчики событий
     this.setupClientHandlers(accountId, client);
 
-    // Инициализируем клиент
-    try {
-      await client.initialize();
-    } catch (error) {
+    // Инициализируем клиент в фоне (не блокируем)
+    client.initialize().catch(async (error) => {
       console.error(`Failed to initialize client for ${accountId}:`, error);
       await this.updateAccountStatus(accountId, 'FAILED');
       this.clients.delete(accountId);
-      throw error;
-    }
+    });
+
+    // Возвращаем сразу, не дожидаясь инициализации
   }
 
   /**

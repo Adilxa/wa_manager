@@ -15,7 +15,8 @@ import {
   Smartphone,
   Clock,
   User,
-  Hash
+  Hash,
+  RefreshCw
 } from 'lucide-react';
 
 interface Account {
@@ -35,6 +36,8 @@ export default function Dashboard() {
   const router = useRouter();
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [regeneratingQR, setRegeneratingQR] = useState(false);
   const [newAccountName, setNewAccountName] = useState('');
   const [selectedAccount, setSelectedAccount] = useState<Account | null>(null);
   const [refreshInterval, setRefreshInterval] = useState<NodeJS.Timeout | null>(null);
@@ -49,7 +52,8 @@ export default function Dashboard() {
   }, [router]);
 
   // Загрузка аккаунтов
-  const loadAccounts = async () => {
+  const loadAccounts = async (showRefreshIndicator = false) => {
+    if (showRefreshIndicator) setRefreshing(true);
     try {
       const response = await fetch(`${API_URL}/api/accounts`);
       const data = await response.json();
@@ -58,15 +62,28 @@ export default function Dashboard() {
       console.error('Failed to load accounts:', error);
     } finally {
       setLoading(false);
+      if (showRefreshIndicator) setRefreshing(false);
     }
   };
 
   useEffect(() => {
     loadAccounts();
-    const interval = setInterval(loadAccounts, 3000);
+
+    // Умный polling: обновляем только когда есть аккаунты в процессе подключения
+    const interval = setInterval(() => {
+      const hasConnectingAccounts = accounts.some(
+        acc => ['CONNECTING', 'AUTHENTICATING', 'QR_READY'].includes(acc.clientStatus)
+      );
+
+      // Обновляем только если есть активные процессы подключения
+      if (hasConnectingAccounts || accounts.length === 0) {
+        loadAccounts();
+      }
+    }, 5000); // Увеличено до 5 секунд
+
     setRefreshInterval(interval);
     return () => interval && clearInterval(interval);
-  }, []);
+  }, [accounts]);
 
   // Создание аккаунта
   const createAccount = async () => {
@@ -93,6 +110,24 @@ export default function Dashboard() {
       await loadAccounts();
     } catch (error) {
       console.error('Failed to connect:', error);
+    }
+  };
+
+  // Регенерация QR кода (переподключение)
+  const regenerateQR = async (accountId: string) => {
+    setRegeneratingQR(true);
+    try {
+      // Сначала отключаем
+      await fetch(`${API_URL}/api/accounts/${accountId}/disconnect`, { method: 'POST' });
+      // Ждем немного
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      // Затем снова подключаем
+      await fetch(`${API_URL}/api/accounts/${accountId}/connect`, { method: 'POST' });
+      await loadAccounts();
+    } catch (error) {
+      console.error('Failed to regenerate QR:', error);
+    } finally {
+      setRegeneratingQR(false);
     }
   };
 
@@ -229,13 +264,21 @@ export default function Dashboard() {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
           {/* Accounts List */}
           <div className="space-y-4">
-            <h2 className="text-xl font-semibold mb-4 flex items-center justify-between">
-              <span className="flex items-center gap-2">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-xl font-semibold flex items-center gap-2">
                 <Smartphone className="w-5 h-5" />
                 Accounts
-              </span>
-              <span className="text-sm text-gray-400">{accounts.length}</span>
-            </h2>
+                <span className="text-sm text-gray-400 font-normal">({accounts.length})</span>
+              </h2>
+              <button
+                onClick={() => loadAccounts(true)}
+                disabled={refreshing}
+                className="flex items-center gap-2 px-3 py-1.5 bg-gray-800 border border-gray-700 rounded-lg text-gray-400 hover:text-white hover:border-gray-600 transition text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} />
+                Refresh
+              </button>
+            </div>
 
             {accounts.length === 0 ? (
               <div className="bg-gray-900 border border-gray-800 rounded-xl p-8 text-center">
@@ -375,10 +418,20 @@ export default function Dashboard() {
                 {/* QR Code */}
                 {selectedAccount.qrCode && (
                   <div className="bg-black/50 border border-gray-800 rounded-xl p-6 text-center">
-                    <h4 className="font-semibold mb-4 flex items-center justify-center gap-2">
-                      <QrCode className="w-5 h-5" />
-                      Scan to Connect
-                    </h4>
+                    <div className="flex items-center justify-between mb-4">
+                      <h4 className="font-semibold flex items-center gap-2">
+                        <QrCode className="w-5 h-5" />
+                        Scan to Connect
+                      </h4>
+                      <button
+                        onClick={() => regenerateQR(selectedAccount.id)}
+                        disabled={regeneratingQR}
+                        className="flex items-center gap-2 px-3 py-1.5 bg-blue-500/10 text-blue-400 rounded-lg text-sm font-medium hover:bg-blue-500/20 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        <RefreshCw className={`w-3.5 h-3.5 ${regeneratingQR ? 'animate-spin' : ''}`} />
+                        {regeneratingQR ? 'Regenerating...' : 'Regenerate'}
+                      </button>
+                    </div>
                     <div className="inline-block p-4 bg-white rounded-xl">
                       <img
                         src={selectedAccount.qrCode}
@@ -388,6 +441,9 @@ export default function Dashboard() {
                     </div>
                     <p className="text-sm text-gray-400 mt-3">
                       Open WhatsApp → Settings → Linked Devices → Link a Device
+                    </p>
+                    <p className="text-xs text-gray-500 mt-2">
+                      QR code expired? Click "Regenerate" to get a new one
                     </p>
                   </div>
                 )}

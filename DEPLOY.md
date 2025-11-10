@@ -1,28 +1,23 @@
-# Инструкция по деплою WhatsApp Manager
+# 🚀 Инструкция по деплою WhatsApp Manager
 
 ## Архитектура деплоя
 
 ```
 ┌─────────────────────────────────────────────────────┐
 │  VPS/Docker (Next.js UI + Express API + WhatsApp)   │
-│  http://your-server.com:6000 - UI                   │
-│  http://your-server.com:6001 - API                  │
+│  http://your-server.com:3000 - UI                   │
+│  http://your-server.com:5001 - API                  │
 │  - Next.js Frontend                                 │
 │  - WhatsApp Web.js клиенты                          │
 │  - Puppeteer + Chrome                               │
-└─────────────────┬───────────────────────────────────┘
-                 │
-                 ▼
-┌─────────────────────────────────────────────────────┐
-│  PostgreSQL (Database)                              │
-│  - Аккаунты WhatsApp                                │
-│  - История сообщений                                │
+│  - PostgreSQL Database                              │
 └─────────────────────────────────────────────────────┘
 ```
 
 ## Порты
-- **6000** - Next.js UI (публичный доступ)
-- **6001** - WhatsApp API (внутренний/публичный доступ)
+- **3000** - Next.js UI (публичный доступ)
+- **5001** - WhatsApp API (внутренний/публичный доступ)
+- **5432** - PostgreSQL (только внутри Docker сети)
 
 ---
 
@@ -54,18 +49,18 @@ nano .env
 Настройте следующие параметры:
 
 ```env
-# Database (ваш PostgreSQL/Supabase)
-DATABASE_URL="postgresql://user:password@host:5432/database?schema=public"
-DIRECT_URL="postgresql://user:password@host:5432/database?schema=public"
+# Database (встроенный PostgreSQL в Docker)
+DATABASE_URL="postgresql://postgres:SECURE_PASSWORD@postgres:5432/wa_manager?schema=public"
+DIRECT_URL="postgresql://postgres:SECURE_PASSWORD@postgres:5432/wa_manager?schema=public"
 
 # URLs (замените на IP вашего сервера или домен)
-NEXT_PUBLIC_APP_URL=http://your-server-ip:6000
-NEXT_PUBLIC_API_URL=http://your-server-ip:6001
+NEXT_PUBLIC_APP_URL=http://your-server-ip:3000
+NEXT_PUBLIC_API_URL=http://your-server-ip:5001
 
 # API Port
 API_PORT=5001
 
-# Security (сгенерируйте случайный ключ)
+# Security (сгенерируйте случайный ключ: openssl rand -base64 32)
 API_SECRET_KEY=your-super-secret-random-key-here
 
 # Node Environment
@@ -99,8 +94,8 @@ docker-compose ps
 docker-compose logs -f
 
 # Проверяем доступность
-curl http://localhost:6000  # UI
-curl http://localhost:6001/api/accounts  # API
+curl http://localhost:3000  # UI
+curl http://localhost:5001/api/accounts  # API
 ```
 
 ---
@@ -111,7 +106,7 @@ curl http://localhost:6001/api/accounts  # API
 
 - Docker и Docker Compose установлены
 - VPS/сервер с минимум 2GB RAM
-- Открытые порты: 6000, 6001
+- Открытые порты: 3000, 5001 (или только 80, 443 если используете Nginx)
 
 ### Шаги деплоя
 
@@ -180,10 +175,10 @@ docker-compose ps
 
 ```bash
 # UI
-curl http://localhost:6000
+curl http://localhost:3000
 
 # API
-curl http://localhost:6001/api/accounts
+curl http://localhost:5001/api/accounts
 ```
 
 #### 6. Настройка Nginx (для HTTPS)
@@ -199,33 +194,36 @@ sudo nano /etc/nginx/sites-available/wa-manager
 Конфигурация Nginx:
 
 ```nginx
-# UI
 server {
     listen 80;
     server_name your-domain.com;
 
+    client_max_body_size 100M;
+
+    # Next.js UI
     location / {
-        proxy_pass http://localhost:6000;
+        proxy_pass http://localhost:3000;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection 'upgrade';
         proxy_set_header Host $host;
         proxy_cache_bypass $http_upgrade;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
     }
-}
 
-# API
-server {
-    listen 443 ssl;
-    server_name api.your-domain.com;
-
-    location / {
-        proxy_pass http://localhost:6001;
+    # WhatsApp API
+    location /api {
+        proxy_pass http://localhost:5001;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection 'upgrade';
         proxy_set_header Host $host;
         proxy_cache_bypass $http_upgrade;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
     }
 }
 ```
@@ -322,7 +320,7 @@ server {
     ssl_certificate_key /etc/letsencrypt/live/api.your-domain.com/privkey.pem;
 
     location / {
-        proxy_pass http://localhost:6001;
+        proxy_pass http://localhost:5001;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection 'upgrade';
@@ -506,8 +504,8 @@ psql $DATABASE_URL < backup_20241103.sql
 docker-compose logs
 
 # Проверяем, не заняты ли порты
-sudo lsof -i :6000
-sudo lsof -i :6001
+sudo lsof -i :3000
+sudo lsof -i :5001
 ```
 
 ### WhatsApp не подключается
@@ -531,8 +529,8 @@ sudo lsof -i :6001
 sudo ufw allow 22    # SSH
 sudo ufw allow 80    # HTTP
 sudo ufw allow 443   # HTTPS
-sudo ufw allow 6000  # UI (если без Nginx)
-sudo ufw allow 6001  # API (если без Nginx)
+sudo ufw allow 3000  # UI (если без Nginx)
+sudo ufw allow 5001  # API (если без Nginx)
 sudo ufw enable
 ```
 
@@ -591,18 +589,18 @@ deploy:
 docker-compose up --build
 
 # Тестируем API
-curl http://localhost:6001/api/accounts
+curl http://localhost:5001/api/accounts
 
 # Тестируем UI
-open http://localhost:6000
+open http://localhost:3000
 ```
 
 ### Тестирование production
 
 ```bash
 # API health check
-curl http://your-server-ip:6001/api/accounts
+curl http://your-server-ip:5001/api/accounts
 
 # UI health check
-curl http://your-server-ip:6000
+curl http://your-server-ip:3000
 ```
