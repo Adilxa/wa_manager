@@ -2,6 +2,8 @@
 FROM node:20-alpine AS builder
 WORKDIR /app
 COPY package*.json ./
+# Пропускаем загрузку Chromium - он будет установлен в production stage
+ENV PUPPETEER_SKIP_DOWNLOAD=true
 RUN npm ci
 COPY . .
 RUN npx prisma generate && npm run build
@@ -10,6 +12,7 @@ RUN npx prisma generate && npm run build
 FROM node:20-alpine
 RUN apk add --no-cache chromium nss freetype harfbuzz ca-certificates ttf-freefont
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser \
+    PUPPETEER_SKIP_DOWNLOAD=true \
     NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1
 
