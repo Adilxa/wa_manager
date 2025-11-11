@@ -463,7 +463,12 @@ const server = app.listen(PORT, async () => {
       console.log(`🔄 Reset ${updated.count} stuck account(s) to DISCONNECTED\n`);
     }
   } catch (error) {
-    console.error('Failed to reset stuck accounts:', error);
+    if (error.code === 'P2021') {
+      console.warn('⚠️  Database tables not found. Run migrations first:');
+      console.warn('   docker-compose exec wa-manager npx prisma migrate deploy\n');
+    } else {
+      console.error('Failed to reset stuck accounts:', error.message);
+    }
   }
 
   console.log(`💡 Ready to accept connections\n`);

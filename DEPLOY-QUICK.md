@@ -30,6 +30,12 @@ docker-compose up -d
 
 # 6. Проверить логи
 docker-compose logs -f wa-manager
+
+# 7. Если видите ошибку "table does not exist" - примените миграции:
+docker-compose exec wa-manager npx prisma migrate deploy
+
+# 8. Перезапустите контейнер после миграций
+docker-compose restart wa-manager
 ```
 
 ---
