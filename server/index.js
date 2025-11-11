@@ -122,15 +122,12 @@ async function initializeClient(accountId) {
     clients.delete(accountId);
   });
 
-  // Initialize
-  try {
-    await client.initialize();
-  } catch (error) {
+  // Initialize in background (non-blocking for multiple connections)
+  client.initialize().catch(async (error) => {
     console.error(`Failed to initialize client for ${accountId}:`, error);
     await updateAccountStatus(accountId, 'FAILED');
     clients.delete(accountId);
-    throw error;
-  }
+  });
 }
 
 // Routes
@@ -297,7 +294,37 @@ app.get('/api/accounts/:id/messages', async (req, res) => {
   }
 });
 
+// Restore clients on server start
+async function restoreClients() {
+  try {
+    const connectedAccounts = await prisma.whatsAppAccount.findMany({
+      where: {
+        status: {
+          in: ['CONNECTED', 'QR_READY', 'CONNECTING', 'AUTHENTICATING'],
+        },
+      },
+    });
+
+    if (connectedAccounts.length > 0) {
+      console.log(`\n🔄 Restoring ${connectedAccounts.length} client(s)...\n`);
+
+      for (const account of connectedAccounts) {
+        try {
+          await initializeClient(account.id);
+        } catch (error) {
+          console.error(`Failed to restore client for ${account.id}:`, error.message);
+        }
+      }
+    }
+  } catch (error) {
+    console.error('Failed to restore clients:', error);
+  }
+}
+
 const PORT = process.env.API_PORT || 5001;
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
   console.log(`\n🚀 WhatsApp API Server running on http://localhost:${PORT}\n`);
+
+  // Restore previously connected clients
+  await restoreClients();
 });
