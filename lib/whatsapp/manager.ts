@@ -336,21 +336,27 @@ class WhatsAppManager {
   async restoreClients(): Promise<void> {
     const connectedAccounts = await prisma.whatsAppAccount.findMany({
       where: {
-        status: {
-          in: ['CONNECTED', 'QR_READY', 'CONNECTING', 'AUTHENTICATING'],
-        },
+        status: 'CONNECTED',
       },
     });
 
-    console.log(`Restoring ${connectedAccounts.length} clients...`);
+    if (connectedAccounts.length === 0) {
+      console.log('📭 No accounts to restore');
+      return;
+    }
+
+    console.log(`🔄 Auto-restoring ${connectedAccounts.length} connected account(s)...`);
 
     for (const account of connectedAccounts) {
       try {
+        console.log(`   Restoring: ${account.name} (${account.id})`);
         await this.initializeClient(account.id);
       } catch (error) {
-        console.error(`Failed to restore client for ${account.id}:`, error);
+        console.error(`   Failed to restore ${account.name}:`, error);
       }
     }
+
+    console.log(`✅ Auto-restore initiated for ${connectedAccounts.length} account(s)`);
   }
 }
 

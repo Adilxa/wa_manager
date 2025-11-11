@@ -384,6 +384,37 @@ app.get('/health', (req, res) => {
   res.json(health);
 });
 
+// Restore connected clients on server start
+async function restoreConnectedClients() {
+  try {
+    const connectedAccounts = await prisma.whatsAppAccount.findMany({
+      where: {
+        status: 'CONNECTED',
+      },
+    });
+
+    if (connectedAccounts.length === 0) {
+      console.log('📭 No accounts to restore\n');
+      return;
+    }
+
+    console.log(`🔄 Auto-restoring ${connectedAccounts.length} connected account(s)...\n`);
+
+    for (const account of connectedAccounts) {
+      try {
+        console.log(`   Restoring: ${account.name} (${account.id})`);
+        await initializeClient(account.id);
+      } catch (error) {
+        console.error(`   Failed to restore ${account.name}:`, error.message);
+      }
+    }
+
+    console.log(`✅ Auto-restore initiated for ${connectedAccounts.length} account(s)\n`);
+  } catch (error) {
+    console.error('Failed to restore connected clients:', error.message);
+  }
+}
+
 // Graceful shutdown handler
 async function gracefulShutdown(signal) {
   console.log(`\n⚠️  Received ${signal}, starting graceful shutdown...\n`);
@@ -445,13 +476,13 @@ const server = app.listen(PORT, async () => {
   // Clean lock files on startup
   cleanLockFiles();
 
-  // Reset ALL accounts to DISCONNECTED on server restart
-  // This prevents "Client not initialized" errors after container restarts
+  // Reset intermediate states (CONNECTING, QR_READY, AUTHENTICATING) to DISCONNECTED
+  // Keep CONNECTED accounts as is for auto-restore
   try {
     const updated = await prisma.whatsAppAccount.updateMany({
       where: {
         status: {
-          not: 'DISCONNECTED',
+          in: ['CONNECTING', 'QR_READY', 'AUTHENTICATING'],
         },
       },
       data: {
@@ -461,7 +492,7 @@ const server = app.listen(PORT, async () => {
     });
 
     if (updated.count > 0) {
-      console.log(`🔄 Reset ${updated.count} account(s) to DISCONNECTED (server restart)\n`);
+      console.log(`🔄 Reset ${updated.count} stuck account(s) to DISCONNECTED\n`);
     }
   } catch (error) {
     if (error.code === 'P2021') {
@@ -471,6 +502,9 @@ const server = app.listen(PORT, async () => {
       console.error('Failed to reset accounts:', error.message);
     }
   }
+
+  // Auto-restore connected clients
+  await restoreConnectedClients();
 
   console.log(`💡 Ready to accept connections\n`);
   console.log(`📊 Health check: http://localhost:${PORT}/health\n`);
