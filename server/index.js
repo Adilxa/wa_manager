@@ -3,6 +3,8 @@ const cors = require('cors');
 const { PrismaClient } = require('@prisma/client');
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const QRCode = require('qrcode');
+const fs = require('fs');
+const path = require('path');
 
 const prisma = new PrismaClient();
 const app = express();
@@ -12,6 +14,46 @@ app.use(express.json());
 
 // Store active WhatsApp clients
 const clients = new Map();
+
+// Graceful shutdown flag
+let isShuttingDown = false;
+
+// Helper function to clean lock files
+function cleanLockFiles() {
+  const authDir = '.wwebjs_auth';
+  const cacheDir = '.wwebjs_cache';
+
+  console.log('🧹 Cleaning Chromium lock files...');
+
+  [authDir, cacheDir].forEach(dir => {
+    if (fs.existsSync(dir)) {
+      const lockFiles = ['SingletonLock', 'SingletonCookie', 'SingletonSocket'];
+
+      function removeLocks(directory) {
+        const files = fs.readdirSync(directory, { withFileTypes: true });
+
+        files.forEach(file => {
+          const fullPath = path.join(directory, file.name);
+
+          if (file.isDirectory()) {
+            removeLocks(fullPath);
+          } else if (lockFiles.includes(file.name)) {
+            try {
+              fs.unlinkSync(fullPath);
+              console.log(`  Removed: ${fullPath}`);
+            } catch (err) {
+              console.warn(`  Failed to remove ${fullPath}:`, err.message);
+            }
+          }
+        });
+      }
+
+      removeLocks(dir);
+    }
+  });
+
+  console.log('✅ Lock files cleaned\n');
+}
 
 // Helper function to update account status
 async function updateAccountStatus(accountId, status, data = {}) {
@@ -25,9 +67,15 @@ async function updateAccountStatus(accountId, status, data = {}) {
   }
 }
 
-// Initialize WhatsApp client for an account
-async function initializeClient(accountId) {
-  console.log(`Initializing client for ${accountId}`);
+// Initialize WhatsApp client for an account with retry logic
+async function initializeClient(accountId, retryCount = 0) {
+  const MAX_RETRIES = 2;
+
+  if (isShuttingDown) {
+    throw new Error('Server is shutting down');
+  }
+
+  console.log(`Initializing client for ${accountId}${retryCount > 0 ? ` (retry ${retryCount})` : ''}`);
 
   const account = await prisma.whatsAppAccount.findUnique({
     where: { id: accountId },
@@ -128,9 +176,25 @@ async function initializeClient(accountId) {
 
   // Initialize in background (non-blocking for multiple connections)
   client.initialize().catch(async (error) => {
-    console.error(`Failed to initialize client for ${accountId}:`, error);
-    await updateAccountStatus(accountId, 'FAILED');
-    clients.delete(accountId);
+    console.error(`Failed to initialize client for ${accountId}:`, error.message);
+
+    // Retry logic for lock file errors
+    if (error.message.includes('profile appears to be in use') && retryCount < MAX_RETRIES) {
+      console.log(`🔄 Retrying initialization for ${accountId} in 3 seconds...`);
+      clients.delete(accountId);
+
+      setTimeout(async () => {
+        try {
+          await initializeClient(accountId, retryCount + 1);
+        } catch (retryError) {
+          console.error(`Retry failed for ${accountId}:`, retryError.message);
+          await updateAccountStatus(accountId, 'FAILED');
+        }
+      }, 3000);
+    } else {
+      await updateAccountStatus(accountId, 'FAILED');
+      clients.delete(accountId);
+    }
   });
 }
 
@@ -298,37 +362,110 @@ app.get('/api/accounts/:id/messages', async (req, res) => {
   }
 });
 
-// Restore clients on server start
-async function restoreClients() {
+// Health check endpoint
+app.get('/health', (req, res) => {
+  const health = {
+    status: isShuttingDown ? 'shutting_down' : 'ok',
+    uptime: process.uptime(),
+    timestamp: new Date().toISOString(),
+    activeClients: clients.size,
+    clients: Array.from(clients.entries()).map(([id, info]) => ({
+      accountId: id,
+      status: info.status,
+      hasPhone: !!info.phoneNumber,
+    })),
+    memory: {
+      heapUsed: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
+      heapTotal: Math.round(process.memoryUsage().heapTotal / 1024 / 1024),
+      rss: Math.round(process.memoryUsage().rss / 1024 / 1024),
+    },
+  };
+
+  res.json(health);
+});
+
+// Graceful shutdown handler
+async function gracefulShutdown(signal) {
+  console.log(`\n⚠️  Received ${signal}, starting graceful shutdown...\n`);
+  isShuttingDown = true;
+
+  // Close all WhatsApp clients
+  const shutdownPromises = [];
+
+  for (const [accountId, clientInfo] of clients.entries()) {
+    console.log(`Closing client for ${accountId}...`);
+
+    const promise = (async () => {
+      try {
+        await clientInfo.client.destroy();
+        console.log(`✅ Client ${accountId} closed`);
+      } catch (error) {
+        console.error(`Failed to close client ${accountId}:`, error.message);
+      }
+    })();
+
+    shutdownPromises.push(promise);
+  }
+
+  // Wait for all clients to close (with timeout)
+  await Promise.race([
+    Promise.all(shutdownPromises),
+    new Promise(resolve => setTimeout(resolve, 10000)), // 10s timeout
+  ]);
+
+  // Close database connection
+  await prisma.$disconnect();
+  console.log('✅ Database disconnected');
+
+  // Exit
+  console.log('👋 Shutdown complete\n');
+  process.exit(0);
+}
+
+// Register shutdown handlers
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
+// Monitor resources every minute
+setInterval(() => {
+  const used = process.memoryUsage();
+  console.log(`
+📊 Resource Monitor:
+  - Active Clients: ${clients.size}
+  - Memory Used: ${Math.round(used.heapUsed / 1024 / 1024)}MB / ${Math.round(used.heapTotal / 1024 / 1024)}MB
+  - RSS: ${Math.round(used.rss / 1024 / 1024)}MB
+  - Uptime: ${Math.round(process.uptime() / 60)} minutes
+  `);
+}, 60000);
+
+const PORT = process.env.API_PORT || 5001;
+const server = app.listen(PORT, async () => {
+  console.log(`\n🚀 WhatsApp API Server running on http://localhost:${PORT}\n`);
+
+  // Clean lock files on startup
+  cleanLockFiles();
+
+  // Reset all stuck accounts in database
   try {
-    const connectedAccounts = await prisma.whatsAppAccount.findMany({
+    const updated = await prisma.whatsAppAccount.updateMany({
       where: {
         status: {
-          in: ['CONNECTED', 'QR_READY', 'CONNECTING', 'AUTHENTICATING'],
+          in: ['CONNECTING', 'QR_READY', 'AUTHENTICATING'],
         },
+      },
+      data: {
+        status: 'DISCONNECTED',
+        qrCode: null,
       },
     });
 
-    if (connectedAccounts.length > 0) {
-      console.log(`\n🔄 Restoring ${connectedAccounts.length} client(s)...\n`);
-
-      for (const account of connectedAccounts) {
-        try {
-          await initializeClient(account.id);
-        } catch (error) {
-          console.error(`Failed to restore client for ${account.id}:`, error.message);
-        }
-      }
+    if (updated.count > 0) {
+      console.log(`🔄 Reset ${updated.count} stuck account(s) to DISCONNECTED\n`);
     }
   } catch (error) {
-    console.error('Failed to restore clients:', error);
+    console.error('Failed to reset stuck accounts:', error);
   }
-}
 
-const PORT = process.env.API_PORT || 5001;
-app.listen(PORT, async () => {
-  console.log(`\n🚀 WhatsApp API Server running on http://localhost:${PORT}\n`);
-
-  // Restore previously connected clients
-  await restoreClients();
+  console.log(`💡 Ready to accept connections\n`);
+  console.log(`📊 Health check: http://localhost:${PORT}/health\n`);
 });
