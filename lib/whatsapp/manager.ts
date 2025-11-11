@@ -76,6 +76,10 @@ class WhatsAppManager {
           '--no-first-run',
           '--no-zygote',
           '--disable-gpu',
+          '--disable-session-crashed-bubble',
+          '--disable-features=ProcessPerSiteUpToMainFrameThreshold',
+          '--disable-crash-reporter',
+          '--no-crash-upload',
         ],
       },
     });
