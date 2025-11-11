@@ -445,12 +445,13 @@ const server = app.listen(PORT, async () => {
   // Clean lock files on startup
   cleanLockFiles();
 
-  // Reset all stuck accounts in database
+  // Reset ALL accounts to DISCONNECTED on server restart
+  // This prevents "Client not initialized" errors after container restarts
   try {
     const updated = await prisma.whatsAppAccount.updateMany({
       where: {
         status: {
-          in: ['CONNECTING', 'QR_READY', 'AUTHENTICATING'],
+          not: 'DISCONNECTED',
         },
       },
       data: {
@@ -460,14 +461,14 @@ const server = app.listen(PORT, async () => {
     });
 
     if (updated.count > 0) {
-      console.log(`🔄 Reset ${updated.count} stuck account(s) to DISCONNECTED\n`);
+      console.log(`🔄 Reset ${updated.count} account(s) to DISCONNECTED (server restart)\n`);
     }
   } catch (error) {
     if (error.code === 'P2021') {
       console.warn('⚠️  Database tables not found. Run migrations first:');
       console.warn('   docker-compose exec wa-manager npx prisma migrate deploy\n');
     } else {
-      console.error('Failed to reset stuck accounts:', error.message);
+      console.error('Failed to reset accounts:', error.message);
     }
   }
 
