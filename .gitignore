@@ -39,5 +39,5 @@ next-env.d.ts
 .wwebjs_auth/
 .wwebjs_cache/
 
-# Prisma
-prisma/migrations/
+# Prisma (migrations needed for production!)
+# prisma/migrations/
