@@ -200,6 +200,39 @@ class WhatsAppManager {
 
       this.clients.delete(accountId);
     });
+
+    // Входящие сообщения
+    client.on('message', async (msg: any) => {
+      try {
+        console.log(`Message received for ${accountId} from ${msg.from}`);
+
+        // Получаем информацию о контакте
+        const contact = await msg.getContact();
+        const chat = await msg.getChat();
+
+        // Извлекаем номер телефона без @c.us
+        const contactNumber = msg.from.replace('@c.us', '').replace('@g.us', '');
+
+        // Сохраняем входящее сообщение в БД
+        await prisma.message.create({
+          data: {
+            accountId,
+            whatsappMessageId: msg.id.id,
+            direction: 'INCOMING',
+            chatId: msg.from,
+            contactNumber: contactNumber,
+            contactName: contact.pushname || contact.name || contactNumber,
+            message: msg.body,
+            status: 'DELIVERED',
+            timestamp: msg.timestamp ? BigInt(msg.timestamp) : null,
+          },
+        });
+
+        console.log(`Message saved: ${msg.body.substring(0, 50)}...`);
+      } catch (error) {
+        console.error(`Failed to save incoming message for ${accountId}:`, error);
+      }
+    });
   }
 
   /**
@@ -225,17 +258,32 @@ class WhatsAppManager {
     try {
       // Форматируем номер телефона
       const chatId = to.includes('@c.us') ? to : `${to}@c.us`;
+      const contactNumber = to.replace('@c.us', '').replace('@g.us', '');
 
       // Отправляем сообщение
       const sentMessage = await clientInfo.client.sendMessage(chatId, message);
+
+      // Получаем информацию о контакте
+      let contactName = contactNumber;
+      try {
+        const contact = await clientInfo.client.getContactById(chatId);
+        contactName = contact.pushname || contact.name || contactNumber;
+      } catch (e) {
+        console.log('Could not get contact name, using number');
+      }
 
       // Сохраняем в БД
       const messageRecord = await prisma.message.create({
         data: {
           accountId,
-          to,
+          whatsappMessageId: sentMessage.id.id,
+          direction: 'OUTGOING',
+          chatId,
+          contactNumber,
+          contactName,
           message,
           status: 'SENT',
+          timestamp: sentMessage.timestamp ? BigInt(sentMessage.timestamp) : null,
         },
       });
 
@@ -247,10 +295,16 @@ class WhatsAppManager {
       console.error(`Failed to send message from ${accountId}:`, error);
 
       // Сохраняем неудачную попытку в БД
+      const chatId = to.includes('@c.us') ? to : `${to}@c.us`;
+      const contactNumber = to.replace('@c.us', '').replace('@g.us', '');
+
       await prisma.message.create({
         data: {
           accountId,
-          to,
+          direction: 'OUTGOING',
+          chatId,
+          contactNumber,
+          contactName: contactNumber,
           message,
           status: 'FAILED',
         },
@@ -317,6 +371,84 @@ class WhatsAppManager {
     } catch (error) {
       console.error(`Failed to update status for ${accountId}:`, error);
     }
+  }
+
+  /**
+   * Получает список чатов аккаунта
+   */
+  async getChats(accountId: string) {
+    // Получаем последнее сообщение из каждого чата
+    const messages = await prisma.message.findMany({
+      where: { accountId },
+      orderBy: { sentAt: 'desc' },
+      distinct: ['chatId'],
+    });
+
+    // Группируем по chatId и получаем информацию о каждом чате
+    const chats = await Promise.all(
+      messages.map(async (msg) => {
+        // Подсчитываем количество непрочитанных сообщений (входящих со статусом DELIVERED)
+        const unreadCount = await prisma.message.count({
+          where: {
+            accountId,
+            chatId: msg.chatId,
+            direction: 'INCOMING',
+            status: 'DELIVERED',
+          },
+        });
+
+        // Получаем последнее сообщение
+        const lastMessage = await prisma.message.findFirst({
+          where: {
+            accountId,
+            chatId: msg.chatId,
+          },
+          orderBy: { sentAt: 'desc' },
+        });
+
+        return {
+          chatId: msg.chatId,
+          contactNumber: msg.contactNumber,
+          contactName: msg.contactName || msg.contactNumber,
+          lastMessage: lastMessage?.message || '',
+          lastMessageTime: lastMessage?.sentAt || new Date(),
+          unreadCount,
+          direction: lastMessage?.direction || 'OUTGOING',
+        };
+      })
+    );
+
+    // Сортируем по времени последнего сообщения
+    return chats.sort((a, b) => b.lastMessageTime.getTime() - a.lastMessageTime.getTime());
+  }
+
+  /**
+   * Получает сообщения конкретного чата
+   */
+  async getChatMessages(accountId: string, chatId: string, limit: number = 50) {
+    const messages = await prisma.message.findMany({
+      where: {
+        accountId,
+        chatId,
+      },
+      orderBy: { sentAt: 'asc' },
+      take: limit,
+    });
+
+    // Отмечаем входящие сообщения как прочитанные
+    await prisma.message.updateMany({
+      where: {
+        accountId,
+        chatId,
+        direction: 'INCOMING',
+        status: 'DELIVERED',
+      },
+      data: {
+        status: 'READ',
+      },
+    });
+
+    return messages;
   }
 
   /**

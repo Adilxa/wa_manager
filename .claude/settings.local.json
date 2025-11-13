@@ -5,7 +5,9 @@
       "Bash(git commit:*)",
       "Bash(git push:*)",
       "Bash(git add:*)",
-      "Bash(find:*)"
+      "Bash(find:*)",
+      "Bash(npx prisma migrate:*)",
+      "Bash(npx prisma db push)"
     ],
     "deny": [],
     "ask": []

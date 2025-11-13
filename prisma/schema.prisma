@@ -29,16 +29,38 @@ model Message {
   accountId String
   account   WhatsAppAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
 
-  to        String
+  // Уникальный ID сообщения из WhatsApp
+  whatsappMessageId String?  @unique
+
+  // Направление сообщения
+  direction MessageDirection
+
+  // Для исходящих - кому отправляем, для входящих - от кого получили
+  chatId    String
+
+  // Номер телефона контакта (без @c.us)
+  contactNumber String
+
+  // Имя контакта (если доступно)
+  contactName String?
+
+  // Текст сообщения
   message   String   @db.Text
+
+  // Статус сообщения
   status    MessageStatus @default(PENDING)
+
+  // Timestamp сообщения из WhatsApp
+  timestamp BigInt?
 
   sentAt    DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([accountId])
+  @@index([accountId, chatId])
   @@index([status])
   @@index([sentAt])
+  @@index([direction])
   @@map("messages")
 }
 
@@ -49,6 +71,11 @@ enum AccountStatus {
   AUTHENTICATING
   CONNECTED
   FAILED
+}
+
+enum MessageDirection {
+  INCOMING
+  OUTGOING
 }
 
 enum MessageStatus {
