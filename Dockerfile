@@ -1,27 +1,43 @@
+# ==========================================
 # Build stage
+# ==========================================
 FROM node:20-alpine AS builder
+
 WORKDIR /app
+
+# Install git and build dependencies (required for Baileys and native modules)
+RUN apk add --no-cache \
+    git \
+    python3 \
+    make \
+    g++ \
+    curl
 
 # Copy package files
 COPY package*.json ./
 
-# Install dependencies
+# Install all dependencies (including dev dependencies for build)
 RUN npm ci
 
-# Copy source files
+# Copy all source files
 COPY . .
 
 # Generate Prisma client and build Next.js
 RUN npx prisma generate && npm run build
 
+# ==========================================
 # Production stage
+# ==========================================
 FROM node:20-alpine
 
-# Set production environment
+# Set production environment variables
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1
 
 WORKDIR /app
+
+# Install git (required for Baileys in production)
+RUN apk add --no-cache git curl
 
 # Copy package files
 COPY package*.json ./
@@ -29,26 +45,33 @@ COPY package*.json ./
 # Install production dependencies only
 RUN npm ci --omit=dev && npm cache clean --force
 
-# Copy built files from builder
+# Copy built files from builder stage
 COPY --from=builder /app/.next ./.next
 COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
 COPY --from=builder /app/public ./public
+
+# Copy application files
 COPY prisma ./prisma
 COPY server ./server
 COPY next.config.ts ./
 
-# Create directories for Baileys auth and logs
+# Create directories for Baileys auth sessions and logs
 RUN mkdir -p .baileys_auth logs
 
-# Create non-root user
+# Create non-root user for security
 RUN addgroup -g 1001 -S nodejs && \
     adduser -S nodejs -u 1001 && \
     chown -R nodejs:nodejs /app
 
+# Switch to non-root user
 USER nodejs
 
-# Expose ports
+# Expose ports (Next.js and API)
 EXPOSE 3000 5001
 
-# Start both Next.js and API server
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD curl -f http://localhost:3000 || exit 1
+
+# Start both Next.js frontend and Baileys API server
 CMD ["sh", "-c", "npx prisma migrate deploy && node server/index.js & npx next start"]
