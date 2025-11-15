@@ -30,6 +30,10 @@ out/
 # WhatsApp data (будет в volumes)
 .wwebjs_auth/
 .wwebjs_cache/
+.baileys_auth/
+
+# Logs
+logs/
 
 # Git
 .git

@@ -9,59 +9,16 @@ datasource db {
 }
 
 model WhatsAppAccount {
-  id          String   @id @default(cuid())
+  id          String        @id @default(cuid())
   name        String
-  phoneNumber String?  @unique
+  phoneNumber String?       @unique
   status      AccountStatus @default(DISCONNECTED)
-  qrCode      String?  @db.Text
-  sessionData String?  @db.Text
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-
-  messages    Message[]
+  qrCode      String?       @db.Text
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
 
   @@index([status])
   @@map("whatsapp_accounts")
-}
-
-model Message {
-  id        String   @id @default(cuid())
-  accountId String
-  account   WhatsAppAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
-
-  // Уникальный ID сообщения из WhatsApp
-  whatsappMessageId String?  @unique
-
-  // Направление сообщения
-  direction MessageDirection
-
-  // Для исходящих - кому отправляем, для входящих - от кого получили
-  chatId    String
-
-  // Номер телефона контакта (без @c.us)
-  contactNumber String
-
-  // Имя контакта (если доступно)
-  contactName String?
-
-  // Текст сообщения
-  message   String   @db.Text
-
-  // Статус сообщения
-  status    MessageStatus @default(PENDING)
-
-  // Timestamp сообщения из WhatsApp
-  timestamp BigInt?
-
-  sentAt    DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  @@index([accountId])
-  @@index([accountId, chatId])
-  @@index([status])
-  @@index([sentAt])
-  @@index([direction])
-  @@map("messages")
 }
 
 enum AccountStatus {
@@ -70,18 +27,5 @@ enum AccountStatus {
   QR_READY
   AUTHENTICATING
   CONNECTED
-  FAILED
-}
-
-enum MessageDirection {
-  INCOMING
-  OUTGOING
-}
-
-enum MessageStatus {
-  PENDING
-  SENT
-  DELIVERED
-  READ
   FAILED
 }

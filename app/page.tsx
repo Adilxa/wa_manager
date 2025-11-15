@@ -16,8 +16,7 @@ import {
   Clock,
   User,
   Hash,
-  RefreshCw,
-  MessageCircle
+  RefreshCw
 } from 'lucide-react';
 
 interface Account {
@@ -228,13 +227,6 @@ export default function Dashboard() {
             <p className="text-gray-400 mt-2">Manage multiple WhatsApp accounts with ease</p>
           </div>
           <div className="flex items-center gap-3">
-            <button
-              onClick={() => router.push('/chat')}
-              className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition font-medium"
-            >
-              <MessageCircle className="w-4 h-4" />
-              Open Chat
-            </button>
             <button
               onClick={handleLogout}
               className="flex items-center gap-2 px-4 py-2 bg-gray-900 border border-gray-800 rounded-lg text-gray-400 hover:text-white hover:border-gray-700 transition"

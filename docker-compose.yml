@@ -57,9 +57,8 @@ services:
       NODE_ENV: production
 
     volumes:
-      # Персистентное хранилище для WhatsApp сессий
-      - wa_sessions:/app/.wwebjs_auth
-      - wa_cache:/app/.wwebjs_cache
+      # Персистентное хранилище для Baileys auth сессий
+      - baileys_auth:/app/.baileys_auth
       - wa_logs:/app/logs
 
     healthcheck:
@@ -82,9 +81,7 @@ services:
 volumes:
   postgres_data:
     driver: local
-  wa_sessions:
-    driver: local
-  wa_cache:
+  baileys_auth:
     driver: local
   wa_logs:
     driver: local

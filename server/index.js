@@ -1,10 +1,17 @@
 const express = require('express');
 const cors = require('cors');
 const { PrismaClient } = require('@prisma/client');
-const { Client, LocalAuth } = require('whatsapp-web.js');
 const QRCode = require('qrcode');
 const fs = require('fs');
 const path = require('path');
+const pino = require('pino');
+const {
+  default: makeWASocket,
+  DisconnectReason,
+  useMultiFileAuthState,
+  fetchLatestBaileysVersion,
+  makeCacheableSignalKeyStore,
+} = require('@whiskeysockets/baileys');
 
 const prisma = new PrismaClient();
 const app = express();
@@ -12,47 +19,34 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Store active WhatsApp clients
+// Logger configuration
+const logger = pino({
+  level: process.env.LOG_LEVEL || 'info',
+  transport: {
+    target: 'pino-pretty',
+    options: {
+      colorize: false,
+      translateTime: 'HH:MM:ss',
+      ignore: 'pid,hostname',
+    },
+  },
+});
+
+// Store active WhatsApp sockets
 const clients = new Map();
 
 // Graceful shutdown flag
 let isShuttingDown = false;
 
-// Helper function to clean lock files
-function cleanLockFiles() {
-  const authDir = '.wwebjs_auth';
-  const cacheDir = '.wwebjs_cache';
+// Auth sessions directory
+const SESSIONS_DIR = path.join(process.cwd(), '.baileys_auth');
+if (!fs.existsSync(SESSIONS_DIR)) {
+  fs.mkdirSync(SESSIONS_DIR, { recursive: true });
+}
 
-  console.log('🧹 Cleaning Chromium lock files...');
-
-  [authDir, cacheDir].forEach(dir => {
-    if (fs.existsSync(dir)) {
-      const lockFiles = ['SingletonLock', 'SingletonCookie', 'SingletonSocket'];
-
-      function removeLocks(directory) {
-        const files = fs.readdirSync(directory, { withFileTypes: true });
-
-        files.forEach(file => {
-          const fullPath = path.join(directory, file.name);
-
-          if (file.isDirectory()) {
-            removeLocks(fullPath);
-          } else if (lockFiles.includes(file.name)) {
-            try {
-              fs.unlinkSync(fullPath);
-              console.log(`  Removed: ${fullPath}`);
-            } catch (err) {
-              console.warn(`  Failed to remove ${fullPath}:`, err.message);
-            }
-          }
-        });
-      }
-
-      removeLocks(dir);
-    }
-  });
-
-  console.log('✅ Lock files cleaned\n');
+// Helper function to get session path
+function getSessionPath(accountId) {
+  return path.join(SESSIONS_DIR, `session_${accountId}`);
 }
 
 // Helper function to update account status
@@ -62,20 +56,19 @@ async function updateAccountStatus(accountId, status, data = {}) {
       where: { id: accountId },
       data: { status, ...data },
     });
+    logger.info(`Updated status for ${accountId}: ${status}`);
   } catch (error) {
-    console.error(`Failed to update status for ${accountId}:`, error);
+    logger.error(`Failed to update status for ${accountId}:`, error);
   }
 }
 
-// Initialize WhatsApp client for an account with retry logic
-async function initializeClient(accountId, retryCount = 0) {
-  const MAX_RETRIES = 2;
-
+// Initialize WhatsApp client with Baileys
+async function initializeClient(accountId) {
   if (isShuttingDown) {
     throw new Error('Server is shutting down');
   }
 
-  console.log(`Initializing client for ${accountId}${retryCount > 0 ? ` (retry ${retryCount})` : ''}`);
+  logger.info(`Initializing Baileys client for ${accountId}`);
 
   const account = await prisma.whatsAppAccount.findUnique({
     where: { id: accountId },
@@ -93,109 +86,136 @@ async function initializeClient(accountId, retryCount = 0) {
     }
   }
 
-  const client = new Client({
-    authStrategy: new LocalAuth({
-      clientId: accountId,
-    }),
-    puppeteer: {
-      headless: true,
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-accelerated-2d-canvas',
-        '--no-first-run',
-        '--no-zygote',
-        '--disable-gpu',
-        '--disable-session-crashed-bubble',
-        '--disable-features=ProcessPerSiteUpToMainFrameThreshold',
-        '--disable-crash-reporter',
-        '--no-crash-upload',
-      ],
-    },
-  });
+  const sessionPath = getSessionPath(accountId);
 
-  const clientInfo = {
-    accountId,
-    client,
-    status: 'CONNECTING',
-  };
+  // Create session directory if it doesn't exist
+  if (!fs.existsSync(sessionPath)) {
+    fs.mkdirSync(sessionPath, { recursive: true });
+  }
 
-  clients.set(accountId, clientInfo);
-  await updateAccountStatus(accountId, 'CONNECTING');
+  try {
+    await updateAccountStatus(accountId, 'CONNECTING');
 
-  // Handle QR code
-  client.on('qr', async (qr) => {
-    console.log(`QR Code received for ${accountId}`);
-    try {
-      const qrDataUrl = await QRCode.toDataURL(qr);
-      clientInfo.qrCode = qrDataUrl;
-      clientInfo.status = 'QR_READY';
-      await updateAccountStatus(accountId, 'QR_READY', { qrCode: qrDataUrl });
-    } catch (error) {
-      console.error(`Failed to generate QR for ${accountId}:`, error);
-    }
-  });
+    // Get latest Baileys version
+    const { version } = await fetchLatestBaileysVersion();
+    logger.info(`Using Baileys version: ${version.join('.')}`);
 
-  // Handle authentication
-  client.on('authenticated', async () => {
-    console.log(`Client authenticated for ${accountId}`);
-    clientInfo.status = 'AUTHENTICATING';
-    await updateAccountStatus(accountId, 'AUTHENTICATING');
-  });
+    // Load auth state
+    const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
 
-  // Handle ready
-  client.on('ready', async () => {
-    console.log(`Client ready for ${accountId}`);
-    const info = client.info;
-    const phoneNumber = info?.wid?.user || null;
-
-    clientInfo.status = 'CONNECTED';
-    clientInfo.phoneNumber = phoneNumber;
-    clientInfo.qrCode = undefined;
-
-    await updateAccountStatus(accountId, 'CONNECTED', {
-      phoneNumber,
-      qrCode: null,
+    // Create socket
+    const sock = makeWASocket({
+      version,
+      logger: pino({ level: 'silent' }), // Silent logger for socket
+      printQRInTerminal: false,
+      auth: {
+        creds: state.creds,
+        keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' })),
+      },
+      markOnlineOnConnect: false,
+      generateHighQualityLinkPreview: true,
+      syncFullHistory: false,
+      browser: ['OCTO WhatsApp Manager', 'Chrome', '120.0.0'],
     });
-  });
 
-  // Handle auth failure
-  client.on('auth_failure', async (msg) => {
-    console.error(`Auth failed for ${accountId}:`, msg);
-    clientInfo.status = 'FAILED';
-    await updateAccountStatus(accountId, 'FAILED');
-  });
+    const clientInfo = {
+      accountId,
+      sock,
+      status: 'CONNECTING',
+      qrCode: null,
+      phoneNumber: null,
+    };
 
-  // Handle disconnect
-  client.on('disconnected', async (reason) => {
-    console.log(`Client disconnected for ${accountId}:`, reason);
-    await updateAccountStatus(accountId, 'DISCONNECTED');
-    clients.delete(accountId);
-  });
+    clients.set(accountId, clientInfo);
 
-  // Initialize in background (non-blocking for multiple connections)
-  client.initialize().catch(async (error) => {
-    console.error(`Failed to initialize client for ${accountId}:`, error.message);
+    // Handle connection updates
+    sock.ev.on('connection.update', async (update) => {
+      const { connection, lastDisconnect, qr } = update;
 
-    // Retry logic for lock file errors
-    if (error.message.includes('profile appears to be in use') && retryCount < MAX_RETRIES) {
-      console.log(`🔄 Retrying initialization for ${accountId} in 3 seconds...`);
-      clients.delete(accountId);
-
-      setTimeout(async () => {
+      // Handle QR code
+      if (qr) {
         try {
-          await initializeClient(accountId, retryCount + 1);
-        } catch (retryError) {
-          console.error(`Retry failed for ${accountId}:`, retryError.message);
-          await updateAccountStatus(accountId, 'FAILED');
+          const qrDataUrl = await QRCode.toDataURL(qr);
+          clientInfo.qrCode = qrDataUrl;
+          clientInfo.status = 'QR_READY';
+          await updateAccountStatus(accountId, 'QR_READY', { qrCode: qrDataUrl });
+          logger.info(`QR code generated for ${accountId}`);
+        } catch (error) {
+          logger.error(`Failed to generate QR for ${accountId}:`, error);
         }
-      }, 3000);
-    } else {
-      await updateAccountStatus(accountId, 'FAILED');
-      clients.delete(accountId);
-    }
-  });
+      }
+
+      // Handle connection status
+      if (connection === 'close') {
+        const shouldReconnect =
+          lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
+
+        logger.info(
+          `Connection closed for ${accountId}. Reconnect: ${shouldReconnect}`
+        );
+
+        if (shouldReconnect && !isShuttingDown) {
+          // Auto-reconnect after 5 seconds
+          setTimeout(() => {
+            initializeClient(accountId).catch((err) => {
+              logger.error(`Failed to reconnect ${accountId}:`, err);
+            });
+          }, 5000);
+        } else {
+          await updateAccountStatus(accountId, 'DISCONNECTED');
+          clients.delete(accountId);
+
+          // Clean up auth if logged out
+          if (lastDisconnect?.error?.output?.statusCode === DisconnectReason.loggedOut) {
+            logger.info(`User logged out, cleaning auth for ${accountId}`);
+            try {
+              if (fs.existsSync(sessionPath)) {
+                fs.rmSync(sessionPath, { recursive: true, force: true });
+              }
+            } catch (err) {
+              logger.error(`Failed to clean auth for ${accountId}:`, err);
+            }
+          }
+        }
+      } else if (connection === 'open') {
+        logger.info(`Connection opened for ${accountId}`);
+        clientInfo.status = 'CONNECTED';
+        clientInfo.qrCode = null;
+
+        // Get phone number
+        const phoneNumber = sock.user?.id?.split(':')[0] || null;
+        clientInfo.phoneNumber = phoneNumber;
+
+        await updateAccountStatus(accountId, 'CONNECTED', {
+          phoneNumber,
+          qrCode: null,
+        });
+      } else if (connection === 'connecting') {
+        logger.info(`Connecting ${accountId}...`);
+        clientInfo.status = 'AUTHENTICATING';
+        await updateAccountStatus(accountId, 'AUTHENTICATING');
+      }
+    });
+
+    // Save credentials on update
+    sock.ev.on('creds.update', saveCreds);
+
+    // Handle messages (optional - for logging)
+    sock.ev.on('messages.upsert', async ({ messages, type }) => {
+      if (type === 'notify') {
+        for (const msg of messages) {
+          if (!msg.key.fromMe && msg.message) {
+            logger.debug(`New message from ${msg.key.remoteJid}`);
+          }
+        }
+      }
+    });
+  } catch (error) {
+    logger.error(`Failed to initialize client for ${accountId}:`, error);
+    await updateAccountStatus(accountId, 'FAILED');
+    clients.delete(accountId);
+    throw error;
+  }
 }
 
 // Routes
@@ -218,6 +238,7 @@ app.get('/api/accounts', async (req, res) => {
 
     res.json(accountsWithClientStatus);
   } catch (error) {
+    logger.error('Failed to load accounts:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -229,8 +250,10 @@ app.post('/api/accounts', async (req, res) => {
     const account = await prisma.whatsAppAccount.create({
       data: { name },
     });
+    logger.info(`Created account: ${account.id} (${name})`);
     res.status(201).json(account);
   } catch (error) {
+    logger.error('Failed to create account:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -253,6 +276,7 @@ app.get('/api/accounts/:id', async (req, res) => {
       hasActiveClient: !!clientStatus,
     });
   } catch (error) {
+    logger.error('Failed to get account:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -263,6 +287,7 @@ app.post('/api/accounts/:id/connect', async (req, res) => {
     await initializeClient(req.params.id);
     res.json({ success: true, message: 'Client initialization started' });
   } catch (error) {
+    logger.error('Failed to connect:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -275,12 +300,15 @@ app.post('/api/accounts/:id/disconnect', async (req, res) => {
       return res.status(404).json({ error: 'Client not found' });
     }
 
-    await clientInfo.client.destroy();
+    // Close the socket
+    await clientInfo.sock.logout();
     clients.delete(req.params.id);
     await updateAccountStatus(req.params.id, 'DISCONNECTED');
 
+    logger.info(`Disconnected client: ${req.params.id}`);
     res.json({ success: true });
   } catch (error) {
+    logger.error('Failed to disconnect:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -291,17 +319,27 @@ app.delete('/api/accounts/:id', async (req, res) => {
     const clientInfo = clients.get(req.params.id);
     if (clientInfo) {
       try {
-        await clientInfo.client.destroy();
-      } catch (e) {}
+        await clientInfo.sock.logout();
+      } catch (e) {
+        logger.error('Error during logout:', e);
+      }
       clients.delete(req.params.id);
+    }
+
+    // Delete session files
+    const sessionPath = getSessionPath(req.params.id);
+    if (fs.existsSync(sessionPath)) {
+      fs.rmSync(sessionPath, { recursive: true, force: true });
     }
 
     await prisma.whatsAppAccount.delete({
       where: { id: req.params.id },
     });
 
+    logger.info(`Deleted account: ${req.params.id}`);
     res.json({ success: true });
   } catch (error) {
+    logger.error('Failed to delete account:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -311,53 +349,39 @@ app.post('/api/messages/send', async (req, res) => {
   try {
     const { accountId, to, message } = req.body;
 
+    if (!accountId || !to || !message) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+
     const clientInfo = clients.get(accountId);
     if (!clientInfo) {
       return res.status(400).json({ error: 'Client not initialized' });
     }
 
     if (clientInfo.status !== 'CONNECTED') {
-      return res.status(400).json({ error: `Client not connected: ${clientInfo.status}` });
+      return res
+        .status(400)
+        .json({ error: `Client not connected: ${clientInfo.status}` });
     }
 
-    const chatId = to.includes('@c.us') ? to : `${to}@c.us`;
-    const sentMessage = await clientInfo.client.sendMessage(chatId, message);
+    // Format phone number (add @s.whatsapp.net if not present)
+    let jid = to;
+    if (!to.includes('@')) {
+      jid = `${to}@s.whatsapp.net`;
+    }
 
-    await prisma.message.create({
-      data: {
-        accountId,
-        to,
-        message,
-        status: 'SENT',
-      },
+    // Send message
+    const sentMessage = await clientInfo.sock.sendMessage(jid, { text: message });
+
+    logger.info(`Message sent from ${accountId} to ${to}`);
+
+    res.json({
+      success: true,
+      messageId: sentMessage.key.id,
+      timestamp: sentMessage.messageTimestamp,
     });
-
-    res.json({ success: true, messageId: sentMessage.id.id });
   } catch (error) {
-    await prisma.message.create({
-      data: {
-        accountId: req.body.accountId,
-        to: req.body.to,
-        message: req.body.message,
-        status: 'FAILED',
-      },
-    }).catch(() => {});
-
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Get messages
-app.get('/api/accounts/:id/messages', async (req, res) => {
-  try {
-    const limit = parseInt(req.query.limit) || 50;
-    const messages = await prisma.message.findMany({
-      where: { accountId: req.params.id },
-      orderBy: { sentAt: 'desc' },
-      take: limit,
-    });
-    res.json(messages);
-  } catch (error) {
+    logger.error('Failed to send message:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -394,44 +418,44 @@ async function restoreConnectedClients() {
     });
 
     if (connectedAccounts.length === 0) {
-      console.log('📭 No accounts to restore\n');
+      logger.info('No accounts to restore');
       return;
     }
 
-    console.log(`🔄 Auto-restoring ${connectedAccounts.length} connected account(s)...\n`);
+    logger.info(`Auto-restoring ${connectedAccounts.length} connected account(s)...`);
 
     for (const account of connectedAccounts) {
       try {
-        console.log(`   Restoring: ${account.name} (${account.id})`);
+        logger.info(`Restoring: ${account.name} (${account.id})`);
         await initializeClient(account.id);
       } catch (error) {
-        console.error(`   Failed to restore ${account.name}:`, error.message);
+        logger.error(`Failed to restore ${account.name}:`, error.message);
       }
     }
 
-    console.log(`✅ Auto-restore initiated for ${connectedAccounts.length} account(s)\n`);
+    logger.info(`Auto-restore initiated for ${connectedAccounts.length} account(s)`);
   } catch (error) {
-    console.error('Failed to restore connected clients:', error.message);
+    logger.error('Failed to restore connected clients:', error.message);
   }
 }
 
 // Graceful shutdown handler
 async function gracefulShutdown(signal) {
-  console.log(`\n⚠️  Received ${signal}, starting graceful shutdown...\n`);
+  logger.info(`Received ${signal}, starting graceful shutdown...`);
   isShuttingDown = true;
 
   // Close all WhatsApp clients
   const shutdownPromises = [];
 
   for (const [accountId, clientInfo] of clients.entries()) {
-    console.log(`Closing client for ${accountId}...`);
+    logger.info(`Closing client for ${accountId}...`);
 
     const promise = (async () => {
       try {
-        await clientInfo.client.destroy();
-        console.log(`✅ Client ${accountId} closed`);
+        await clientInfo.sock.end();
+        logger.info(`Client ${accountId} closed`);
       } catch (error) {
-        console.error(`Failed to close client ${accountId}:`, error.message);
+        logger.error(`Failed to close client ${accountId}:`, error.message);
       }
     })();
 
@@ -441,15 +465,15 @@ async function gracefulShutdown(signal) {
   // Wait for all clients to close (with timeout)
   await Promise.race([
     Promise.all(shutdownPromises),
-    new Promise(resolve => setTimeout(resolve, 10000)), // 10s timeout
+    new Promise((resolve) => setTimeout(resolve, 10000)), // 10s timeout
   ]);
 
   // Close database connection
   await prisma.$disconnect();
-  console.log('✅ Database disconnected');
+  logger.info('Database disconnected');
 
   // Exit
-  console.log('👋 Shutdown complete\n');
+  logger.info('Shutdown complete');
   process.exit(0);
 }
 
@@ -457,27 +481,24 @@ async function gracefulShutdown(signal) {
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
-// Monitor resources every minute
+// Monitor resources every 5 minutes
 setInterval(() => {
   const used = process.memoryUsage();
-  console.log(`
-📊 Resource Monitor:
-  - Active Clients: ${clients.size}
-  - Memory Used: ${Math.round(used.heapUsed / 1024 / 1024)}MB / ${Math.round(used.heapTotal / 1024 / 1024)}MB
-  - RSS: ${Math.round(used.rss / 1024 / 1024)}MB
-  - Uptime: ${Math.round(process.uptime() / 60)} minutes
-  `);
-}, 60000);
+  logger.info({
+    activeClients: clients.size,
+    memoryUsedMB: Math.round(used.heapUsed / 1024 / 1024),
+    memoryTotalMB: Math.round(used.heapTotal / 1024 / 1024),
+    rssMB: Math.round(used.rss / 1024 / 1024),
+    uptimeMinutes: Math.round(process.uptime() / 60),
+  }, 'Resource Monitor');
+}, 300000); // 5 minutes
 
 const PORT = process.env.API_PORT || 5001;
 const server = app.listen(PORT, async () => {
-  console.log(`\n🚀 WhatsApp API Server running on http://localhost:${PORT}\n`);
+  logger.info(`WhatsApp API Server running on http://localhost:${PORT}`);
+  logger.info(`Using Baileys - Pure WhatsApp Web API`);
 
-  // Clean lock files on startup
-  cleanLockFiles();
-
-  // Reset intermediate states (CONNECTING, QR_READY, AUTHENTICATING) to DISCONNECTED
-  // Keep CONNECTED accounts as is for auto-restore
+  // Reset intermediate states to DISCONNECTED
   try {
     const updated = await prisma.whatsAppAccount.updateMany({
       where: {
@@ -492,20 +513,19 @@ const server = app.listen(PORT, async () => {
     });
 
     if (updated.count > 0) {
-      console.log(`🔄 Reset ${updated.count} stuck account(s) to DISCONNECTED\n`);
+      logger.info(`Reset ${updated.count} stuck account(s) to DISCONNECTED`);
     }
   } catch (error) {
     if (error.code === 'P2021') {
-      console.warn('⚠️  Database tables not found. Run migrations first:');
-      console.warn('   docker-compose exec wa-manager npx prisma migrate deploy\n');
+      logger.warn('Database tables not found. Run migrations first');
     } else {
-      console.error('Failed to reset accounts:', error.message);
+      logger.error('Failed to reset accounts:', error.message);
     }
   }
 
   // Auto-restore connected clients
   await restoreConnectedClients();
 
-  console.log(`💡 Ready to accept connections\n`);
-  console.log(`📊 Health check: http://localhost:${PORT}/health\n`);
+  logger.info('Ready to accept connections');
+  logger.info(`Health check: http://localhost:${PORT}/health`);
 });
