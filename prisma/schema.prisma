@@ -17,8 +17,36 @@ model WhatsAppAccount {
   createdAt   DateTime      @default(now())
   updatedAt   DateTime      @updatedAt
 
+  messages    Message[]
+
   @@index([status])
   @@map("whatsapp_accounts")
+}
+
+model Message {
+  id             String           @id @default(cuid())
+  accountId      String
+  account        WhatsAppAccount  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  chatId         String?
+  direction      MessageDirection?
+  message        String           @db.Text
+  to             String?
+  from           String?
+  status         MessageStatus    @default(PENDING)
+  contactName    String?
+  contactNumber  String?
+
+  sentAt         DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  @@index([accountId])
+  @@index([accountId, chatId])
+  @@index([status])
+  @@index([sentAt])
+  @@index([to])
+  @@index([from])
+  @@map("messages")
 }
 
 enum AccountStatus {
@@ -27,5 +55,18 @@ enum AccountStatus {
   QR_READY
   AUTHENTICATING
   CONNECTED
+  FAILED
+}
+
+enum MessageDirection {
+  INCOMING
+  OUTGOING
+}
+
+enum MessageStatus {
+  PENDING
+  SENT
+  DELIVERED
+  READ
   FAILED
 }

@@ -210,12 +210,38 @@ async function initializeClient(accountId) {
     // Save credentials on update
     sock.ev.on("creds.update", saveCreds);
 
-    // Handle messages (optional - for logging)
+    // Handle incoming messages and save to database
     sock.ev.on("messages.upsert", async ({ messages, type }) => {
       if (type === "notify") {
         for (const msg of messages) {
-          if (!msg.key.fromMe && msg.message) {
-            logger.debug(`New message from ${msg.key.remoteJid}`);
+          try {
+            const messageText = msg.message?.conversation ||
+                               msg.message?.extendedTextMessage?.text || '';
+
+            if (!messageText) continue;
+
+            const chatId = msg.key.remoteJid;
+            const contactNumber = chatId.split('@')[0];
+            const isFromMe = msg.key.fromMe;
+
+            // Save to database
+            await prisma.message.create({
+              data: {
+                accountId,
+                chatId,
+                direction: isFromMe ? 'OUTGOING' : 'INCOMING',
+                message: messageText,
+                to: isFromMe ? contactNumber : null,
+                from: isFromMe ? null : contactNumber,
+                status: 'SENT',
+                contactNumber,
+                contactName: msg.pushName || null,
+              },
+            });
+
+            logger.info(`Saved ${isFromMe ? 'outgoing' : 'incoming'} message for ${accountId}`);
+          } catch (error) {
+            logger.error(`Failed to save message for ${accountId}:`, error);
           }
         }
       }
@@ -385,6 +411,19 @@ app.post("/api/messages/send", async (req, res) => {
       text: message,
     });
 
+    // Save to database
+    await prisma.message.create({
+      data: {
+        accountId,
+        chatId: jid,
+        direction: 'OUTGOING',
+        message,
+        to,
+        status: 'SENT',
+        contactNumber: to,
+      },
+    });
+
     logger.info(`Message sent from ${accountId} to ${to}`);
 
     res.json({
@@ -394,6 +433,107 @@ app.post("/api/messages/send", async (req, res) => {
     });
   } catch (error) {
     logger.error("Failed to send message:", error);
+
+    // Save failed message
+    try {
+      await prisma.message.create({
+        data: {
+          accountId: req.body.accountId,
+          message: req.body.message,
+          to: req.body.to,
+          direction: 'OUTGOING',
+          status: 'FAILED',
+          contactNumber: req.body.to,
+        },
+      });
+    } catch (dbError) {
+      logger.error("Failed to save failed message:", dbError);
+    }
+
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get chats for an account
+app.get("/api/accounts/:id/chats", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { page = 1, limit = 50, phone } = req.query;
+
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
+    const skip = (pageNum - 1) * limitNum;
+
+    // Build where clause
+    const where = {
+      accountId: id,
+    };
+
+    // Filter by phone if provided
+    if (phone) {
+      where.OR = [
+        { to: { contains: phone } },
+        { from: { contains: phone } },
+        { contactNumber: { contains: phone } },
+      ];
+    }
+
+    // Get all messages grouped by chat
+    const messages = await prisma.message.findMany({
+      where,
+      orderBy: { sentAt: 'desc' },
+    });
+
+    // Group messages by contactNumber or chatId
+    const chatsMap = new Map();
+
+    messages.forEach(msg => {
+      const key = msg.contactNumber || msg.to || msg.from || msg.chatId;
+      if (!key) return;
+
+      if (!chatsMap.has(key)) {
+        chatsMap.set(key, {
+          chatId: msg.chatId,
+          contactNumber: msg.contactNumber || msg.to || msg.from,
+          contactName: msg.contactName,
+          messages: [],
+          unreadCount: 0,
+          lastMessageTime: msg.sentAt,
+        });
+      }
+
+      const chat = chatsMap.get(key);
+      chat.messages.push(msg);
+
+      // Update last message time if newer
+      if (new Date(msg.sentAt) > new Date(chat.lastMessageTime)) {
+        chat.lastMessageTime = msg.sentAt;
+      }
+    });
+
+    // Convert map to array and sort by last message time
+    let chatsArray = Array.from(chatsMap.values());
+    chatsArray.sort((a, b) => new Date(b.lastMessageTime) - new Date(a.lastMessageTime));
+
+    // Apply pagination
+    const total = chatsArray.length;
+    const paginatedChats = chatsArray.slice(skip, skip + limitNum);
+
+    const totalPages = Math.ceil(total / limitNum);
+
+    res.json({
+      data: paginatedChats,
+      pagination: {
+        total,
+        page: pageNum,
+        limit: limitNum,
+        totalPages,
+        hasNextPage: pageNum < totalPages,
+        hasPrevPage: pageNum > 1,
+      },
+    });
+  } catch (error) {
+    logger.error("Failed to get chats:", error);
     res.status(500).json({ error: error.message });
   }
 });
