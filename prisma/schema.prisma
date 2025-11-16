@@ -66,6 +66,7 @@ enum MessageDirection {
 enum MessageStatus {
   PENDING
   SENT
+  RECEIVED
   DELIVERED
   READ
   FAILED

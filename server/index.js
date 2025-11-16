@@ -233,7 +233,7 @@ async function initializeClient(accountId) {
                 message: messageText,
                 to: isFromMe ? contactNumber : null,
                 from: isFromMe ? null : contactNumber,
-                status: 'SENT',
+                status: isFromMe ? 'SENT' : 'RECEIVED',
                 contactNumber,
                 contactName: msg.pushName || null,
               },
