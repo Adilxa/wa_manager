@@ -119,7 +119,7 @@ async function initializeClient(accountId) {
       markOnlineOnConnect: false,
       generateHighQualityLinkPreview: true,
       syncFullHistory: false,
-      browser: ["OCTO WhatsApp Manager", "Chrome", "120.0.0"],
+      browser: ["Syntlex WhatsApp Manager", "Chrome", "120.0.0"],
     });
 
     const clientInfo = {
@@ -215,13 +215,15 @@ async function initializeClient(accountId) {
       if (type === "notify") {
         for (const msg of messages) {
           try {
-            const messageText = msg.message?.conversation ||
-                               msg.message?.extendedTextMessage?.text || '';
+            const messageText =
+              msg.message?.conversation ||
+              msg.message?.extendedTextMessage?.text ||
+              "";
 
             if (!messageText) continue;
 
             const chatId = msg.key.remoteJid;
-            const contactNumber = chatId.split('@')[0];
+            const contactNumber = chatId.split("@")[0];
             const isFromMe = msg.key.fromMe;
 
             // Save to database
@@ -229,17 +231,21 @@ async function initializeClient(accountId) {
               data: {
                 accountId,
                 chatId,
-                direction: isFromMe ? 'OUTGOING' : 'INCOMING',
+                direction: isFromMe ? "OUTGOING" : "INCOMING",
                 message: messageText,
                 to: isFromMe ? contactNumber : null,
                 from: isFromMe ? null : contactNumber,
-                status: isFromMe ? 'SENT' : 'RECEIVED',
+                status: isFromMe ? "SENT" : "RECEIVED",
                 contactNumber,
                 contactName: msg.pushName || null,
               },
             });
 
-            logger.info(`Saved ${isFromMe ? 'outgoing' : 'incoming'} message for ${accountId}`);
+            logger.info(
+              `Saved ${
+                isFromMe ? "outgoing" : "incoming"
+              } message for ${accountId}`
+            );
           } catch (error) {
             logger.error(`Failed to save message for ${accountId}:`, error);
           }
@@ -416,10 +422,10 @@ app.post("/api/messages/send", async (req, res) => {
       data: {
         accountId,
         chatId: jid,
-        direction: 'OUTGOING',
+        direction: "OUTGOING",
         message,
         to,
-        status: 'SENT',
+        status: "SENT",
         contactNumber: to,
       },
     });
@@ -441,8 +447,8 @@ app.post("/api/messages/send", async (req, res) => {
           accountId: req.body.accountId,
           message: req.body.message,
           to: req.body.to,
-          direction: 'OUTGOING',
-          status: 'FAILED',
+          direction: "OUTGOING",
+          status: "FAILED",
           contactNumber: req.body.to,
         },
       });
@@ -481,7 +487,7 @@ app.get("/api/accounts/:id/chats", async (req, res) => {
     // Get all messages grouped by chat
     const messages = await prisma.message.findMany({
       where,
-      orderBy: { sentAt: 'desc' },
+      orderBy: { sentAt: "desc" },
     });
 
     // Group messages by contactNumber or chatId
@@ -513,7 +519,9 @@ app.get("/api/accounts/:id/chats", async (req, res) => {
 
     // Convert map to array and sort by last message time
     let chatsArray = Array.from(chatsMap.values());
-    chatsArray.sort((a, b) => new Date(b.lastMessageTime) - new Date(a.lastMessageTime));
+    chatsArray.sort(
+      (a, b) => new Date(b.lastMessageTime) - new Date(a.lastMessageTime)
+    );
 
     // Apply pagination
     const total = chatsArray.length;
