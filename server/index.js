@@ -48,9 +48,14 @@ const CONFIG = {
   // Initialization timeout
   INIT_TIMEOUT: 120000, // 2 minutes to initialize
 
-  // Rate limiting
+  // Rate limiting - БЕЗОПАСНЫЕ значения для избежания бана
   RATE_LIMIT_WINDOW: 60000, // 1 minute window
-  RATE_LIMIT_MAX_MESSAGES: 100, // Max 30 messages per minute per account
+  RATE_LIMIT_MAX_MESSAGES: 20, // Max 20 messages per minute (было 100)
+
+  // Дневные лимиты для нового аккаунта
+  DAILY_MESSAGE_LIMIT_NEW_ACCOUNT: 500, // Для аккаунтов младше 7 дней
+  DAILY_MESSAGE_LIMIT_OLD_ACCOUNT: 1000, // Для старых аккаунтов
+  DAILY_NEW_CHATS_LIMIT: 100, // Максимум новых чатов в день
 
   // Memory management
   MEMORY_CHECK_INTERVAL: 60000, // Check every minute
@@ -63,6 +68,17 @@ const CONFIG = {
 
   // Resource monitoring
   RESOURCE_MONITOR_INTERVAL: 300000, // 5 minutes
+
+  // Human-like behavior delays (в миллисекундах)
+  TYPING_SPEED_MIN: 30, // Минимальная скорость печати (мс на символ)
+  TYPING_SPEED_MAX: 100, // Максимальная скорость печати (мс на символ)
+  DELAY_BEFORE_TYPING_MIN: 500, // Задержка перед началом печати
+  DELAY_BEFORE_TYPING_MAX: 2000,
+  DELAY_BETWEEN_MESSAGES_MIN: 3000, // Задержка между сообщениями
+  DELAY_BETWEEN_MESSAGES_MAX: 8000,
+  REST_AFTER_MESSAGES: 5, // Отдых после N сообщений
+  REST_DURATION_MIN: 30000, // Минимальное время отдыха (30 сек)
+  REST_DURATION_MAX: 120000, // Максимальное время отдыха (2 мин)
 };
 
 // ==================== STATE MANAGEMENT ====================
@@ -78,6 +94,12 @@ const connectingAccounts = new Set();
 
 // Rate limiting tracker
 const rateLimiter = new Map();
+
+// Daily limits tracker
+const dailyLimits = new Map();
+
+// Message counters for rest periods
+const messageCounters = new Map();
 
 // Message queue for retry logic
 const messageQueues = new Map();
@@ -127,6 +149,23 @@ function getBackoffDelay(attempt) {
   return delay + Math.random() * 1000;
 }
 
+// Generate random delay in range
+function randomDelay(min, max) {
+  return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+// Calculate typing delay based on message length
+function calculateTypingDelay(message) {
+  const length = message.length;
+  const speed = randomDelay(CONFIG.TYPING_SPEED_MIN, CONFIG.TYPING_SPEED_MAX);
+  return length * speed;
+}
+
+// Sleep function
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 // Check rate limit for account
 function checkRateLimit(accountId) {
   const now = Date.now();
@@ -153,6 +192,78 @@ function checkRateLimit(accountId) {
 
   limiter.count++;
   return { allowed: true };
+}
+
+// Check daily limits
+async function checkDailyLimit(accountId) {
+  const now = Date.now();
+  const today = new Date().toDateString();
+
+  if (!dailyLimits.has(accountId)) {
+    dailyLimits.set(accountId, {
+      date: today,
+      messageCount: 0,
+      newChatsCount: 0,
+    });
+  }
+
+  const limits = dailyLimits.get(accountId);
+
+  // Reset if new day
+  if (limits.date !== today) {
+    limits.date = today;
+    limits.messageCount = 0;
+    limits.newChatsCount = 0;
+  }
+
+  // Get account creation date to determine limits
+  const account = await prisma.whatsAppAccount.findUnique({
+    where: { id: accountId },
+  });
+
+  if (!account) {
+    return { allowed: false, reason: "Account not found" };
+  }
+
+  const accountAge = Date.now() - new Date(account.createdAt).getTime();
+  const isNewAccount = accountAge < 7 * 24 * 60 * 60 * 1000; // 7 days
+
+  const dailyLimit = isNewAccount
+    ? CONFIG.DAILY_MESSAGE_LIMIT_NEW_ACCOUNT
+    : CONFIG.DAILY_MESSAGE_LIMIT_OLD_ACCOUNT;
+
+  if (limits.messageCount >= dailyLimit) {
+    return {
+      allowed: false,
+      reason: `Daily limit reached (${dailyLimit} messages)`,
+      isNewAccount,
+    };
+  }
+
+  return { allowed: true, isNewAccount };
+}
+
+// Check if account needs rest
+function checkNeedRest(accountId) {
+  if (!messageCounters.has(accountId)) {
+    messageCounters.set(accountId, {
+      count: 0,
+      lastRest: Date.now(),
+      isResting: false,
+    });
+  }
+
+  const counter = messageCounters.get(accountId);
+
+  if (counter.isResting) {
+    return { needRest: true, reason: "Currently resting" };
+  }
+
+  if (counter.count >= CONFIG.REST_AFTER_MESSAGES) {
+    return { needRest: true, reason: "Need rest after messages" };
+  }
+
+  return { needRest: false };
 }
 
 // Clean up old client resources
@@ -364,6 +475,55 @@ function enqueueMessage(accountId, to, message) {
   return messageId;
 }
 
+// Send message with human-like behavior
+async function sendMessageWithHumanBehavior(accountId, jid, message) {
+  const clientInfo = clients.get(accountId);
+  if (!clientInfo || clientInfo.status !== "CONNECTED") {
+    throw new Error("Client not connected");
+  }
+
+  // 1. Случайная задержка перед началом печати (думаем, что написать)
+  const delayBeforeTyping = randomDelay(
+    CONFIG.DELAY_BEFORE_TYPING_MIN,
+    CONFIG.DELAY_BEFORE_TYPING_MAX
+  );
+  logger.debug(`Waiting ${delayBeforeTyping}ms before typing...`);
+  await sleep(delayBeforeTyping);
+
+  // 2. Отправляем статус "печатает"
+  try {
+    await clientInfo.sock.sendPresenceUpdate("composing", jid);
+    logger.debug(`Typing indicator sent to ${jid}`);
+  } catch (err) {
+    logger.warn(`Failed to send typing indicator: ${err.message}`);
+  }
+
+  // 3. Эмулируем время печати на основе длины сообщения
+  const typingDuration = calculateTypingDelay(message);
+  logger.debug(
+    `Typing for ${typingDuration}ms (message length: ${message.length})`
+  );
+  await sleep(typingDuration);
+
+  // 4. Отправляем статус "онлайн" (закончили печатать)
+  try {
+    await clientInfo.sock.sendPresenceUpdate("paused", jid);
+  } catch (err) {
+    logger.warn(`Failed to send paused status: ${err.message}`);
+  }
+
+  // 5. Небольшая задержка перед отправкой (проверяем сообщение)
+  await sleep(randomDelay(200, 800));
+
+  // 6. Отправляем сообщение
+  const sentMessage = await clientInfo.sock.sendMessage(jid, {
+    text: message,
+  });
+
+  logger.info(`Message sent with human-like behavior to ${jid}`);
+  return sentMessage;
+}
+
 // Process message queue for an account
 async function processMessageQueue(accountId) {
   const queue = messageQueues.get(accountId);
@@ -371,6 +531,34 @@ async function processMessageQueue(accountId) {
 
   const clientInfo = clients.get(accountId);
   if (!clientInfo || clientInfo.status !== "CONNECTED") return;
+
+  // Check if need rest
+  const restCheck = checkNeedRest(accountId);
+  if (restCheck.needRest) {
+    const counter = messageCounters.get(accountId);
+    if (!counter.isResting) {
+      // Start rest period
+      counter.isResting = true;
+      const restDuration = randomDelay(
+        CONFIG.REST_DURATION_MIN,
+        CONFIG.REST_DURATION_MAX
+      );
+      logger.info(
+        `Account ${accountId} taking a break for ${Math.round(
+          restDuration / 1000
+        )} seconds after ${counter.count} messages`
+      );
+
+      setTimeout(() => {
+        counter.isResting = false;
+        counter.count = 0;
+        counter.lastRest = Date.now();
+        logger.info(`Account ${accountId} finished resting, resuming...`);
+        processMessageQueue(accountId);
+      }, restDuration);
+    }
+    return;
+  }
 
   const msg = queue[0];
 
@@ -381,10 +569,12 @@ async function processMessageQueue(accountId) {
       jid = `${msg.to}@s.whatsapp.net`;
     }
 
-    // Send message
-    const sentMessage = await clientInfo.sock.sendMessage(jid, {
-      text: msg.message,
-    });
+    // Send message with human-like behavior
+    const sentMessage = await sendMessageWithHumanBehavior(
+      accountId,
+      jid,
+      msg.message
+    );
 
     // Save to database
     await prisma.message.create({
@@ -399,14 +589,37 @@ async function processMessageQueue(accountId) {
       },
     });
 
+    // Increment daily counter
+    const limits = dailyLimits.get(accountId);
+    if (limits) {
+      limits.messageCount++;
+    }
+
+    // Increment message counter for rest periods
+    const counter = messageCounters.get(accountId);
+    if (counter) {
+      counter.count++;
+    }
+
     // Remove from queue
     queue.shift();
 
-    logger.info(`Message sent from ${accountId} to ${msg.to}`);
+    logger.info(
+      `Message sent from ${accountId} to ${msg.to} (${
+        counter ? counter.count : 0
+      } messages since last rest)`
+    );
 
-    // Process next message
+    // Process next message with random delay
     if (queue.length > 0) {
-      setTimeout(() => processMessageQueue(accountId), 1000);
+      const nextDelay = randomDelay(
+        CONFIG.DELAY_BETWEEN_MESSAGES_MIN,
+        CONFIG.DELAY_BETWEEN_MESSAGES_MAX
+      );
+      logger.debug(
+        `Waiting ${Math.round(nextDelay / 1000)}s before next message...`
+      );
+      setTimeout(() => processMessageQueue(accountId), nextDelay);
     }
 
     return sentMessage;
@@ -906,7 +1119,7 @@ app.delete("/api/accounts/:id", async (req, res) => {
   }
 });
 
-// Send message with rate limiting and queue
+// Send message with rate limiting, daily limits, and human-like behavior
 app.post("/api/messages/send", async (req, res) => {
   try {
     const { accountId, to, message } = req.body;
@@ -915,12 +1128,21 @@ app.post("/api/messages/send", async (req, res) => {
       return res.status(400).json({ error: "Missing required fields" });
     }
 
-    // Check rate limit
+    // Check rate limit (per minute)
     const rateCheck = checkRateLimit(accountId);
     if (!rateCheck.allowed) {
       return res.status(429).json({
         error: `Rate limit exceeded. Try again in ${rateCheck.resetIn} seconds`,
         resetIn: rateCheck.resetIn,
+      });
+    }
+
+    // Check daily limit
+    const dailyCheck = await checkDailyLimit(accountId);
+    if (!dailyCheck.allowed) {
+      return res.status(429).json({
+        error: dailyCheck.reason,
+        isNewAccount: dailyCheck.isNewAccount,
       });
     }
 
@@ -949,10 +1171,12 @@ app.post("/api/messages/send", async (req, res) => {
       jid = `${to}@s.whatsapp.net`;
     }
 
-    // Send message
-    const sentMessage = await clientInfo.sock.sendMessage(jid, {
-      text: message,
-    });
+    // Send message with human-like behavior
+    const sentMessage = await sendMessageWithHumanBehavior(
+      accountId,
+      jid,
+      message
+    );
 
     // Save to database
     await prisma.message.create({
@@ -967,12 +1191,37 @@ app.post("/api/messages/send", async (req, res) => {
       },
     });
 
-    logger.info(`Message sent from ${accountId} to ${to}`);
+    // Increment daily counter
+    const limits = dailyLimits.get(accountId);
+    if (limits) {
+      limits.messageCount++;
+    }
+
+    // Increment message counter for rest periods
+    const counter = messageCounters.get(accountId);
+    if (counter) {
+      counter.count++;
+    }
+
+    const limitsInfo = dailyLimits.get(accountId);
+    logger.info(
+      `Message sent from ${accountId} to ${to} (Daily: ${
+        limitsInfo?.messageCount || 0
+      }/${
+        dailyCheck.isNewAccount
+          ? CONFIG.DAILY_MESSAGE_LIMIT_NEW_ACCOUNT
+          : CONFIG.DAILY_MESSAGE_LIMIT_OLD_ACCOUNT
+      }, Session: ${counter?.count || 0}/${CONFIG.REST_AFTER_MESSAGES})`
+    );
 
     res.json({
       success: true,
       messageId: sentMessage.key.id,
       timestamp: sentMessage.messageTimestamp,
+      dailyCount: limitsInfo?.messageCount || 0,
+      dailyLimit: dailyCheck.isNewAccount
+        ? CONFIG.DAILY_MESSAGE_LIMIT_NEW_ACCOUNT
+        : CONFIG.DAILY_MESSAGE_LIMIT_OLD_ACCOUNT,
     });
   } catch (error) {
     logger.error("Failed to send message:", error);
@@ -1079,6 +1328,129 @@ app.get("/api/accounts/:id/chats", async (req, res) => {
     });
   } catch (error) {
     logger.error("Failed to get chats:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get messages for a specific chat
+app.get("/api/accounts/:accountId/chats/:chatId", async (req, res) => {
+  try {
+    const { accountId, chatId } = req.params;
+    const decodedChatId = decodeURIComponent(chatId);
+
+    const messages = await prisma.message.findMany({
+      where: {
+        accountId,
+        chatId: decodedChatId,
+      },
+      orderBy: { sentAt: "asc" },
+    });
+
+    res.json(messages);
+  } catch (error) {
+    logger.error("Failed to get chat messages:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Send message to a specific chat with human-like behavior
+app.post("/api/accounts/:accountId/chats/:chatId", async (req, res) => {
+  try {
+    const { accountId, chatId } = req.params;
+    const { message } = req.body;
+    const decodedChatId = decodeURIComponent(chatId);
+
+    if (!message) {
+      return res.status(400).json({ error: "Message is required" });
+    }
+
+    // Check rate limit (per minute)
+    const rateCheck = checkRateLimit(accountId);
+    if (!rateCheck.allowed) {
+      return res.status(429).json({
+        error: `Rate limit exceeded. Try again in ${rateCheck.resetIn} seconds`,
+        resetIn: rateCheck.resetIn,
+      });
+    }
+
+    // Check daily limit
+    const dailyCheck = await checkDailyLimit(accountId);
+    if (!dailyCheck.allowed) {
+      return res.status(429).json({
+        error: dailyCheck.reason,
+        isNewAccount: dailyCheck.isNewAccount,
+      });
+    }
+
+    const clientInfo = clients.get(accountId);
+    if (!clientInfo) {
+      return res.status(400).json({ error: "Client not initialized" });
+    }
+
+    if (clientInfo.status !== "CONNECTED") {
+      return res.status(400).json({ error: "Client not connected" });
+    }
+
+    // Update last activity
+    clientInfo.lastActivity = Date.now();
+
+    // Send message with human-like behavior
+    const sentMessage = await sendMessageWithHumanBehavior(
+      accountId,
+      decodedChatId,
+      message
+    );
+
+    // Extract contact number from chatId
+    const contactNumber = decodedChatId.split("@")[0];
+
+    // Save to database
+    await prisma.message.create({
+      data: {
+        accountId,
+        chatId: decodedChatId,
+        direction: "OUTGOING",
+        message,
+        to: contactNumber,
+        status: "SENT",
+        contactNumber,
+      },
+    });
+
+    // Increment daily counter
+    const limits = dailyLimits.get(accountId);
+    if (limits) {
+      limits.messageCount++;
+    }
+
+    // Increment message counter for rest periods
+    const counter = messageCounters.get(accountId);
+    if (counter) {
+      counter.count++;
+    }
+
+    const limitsInfo = dailyLimits.get(accountId);
+    logger.info(
+      `Message sent from ${accountId} to chat ${decodedChatId} (Daily: ${
+        limitsInfo?.messageCount || 0
+      }/${
+        dailyCheck.isNewAccount
+          ? CONFIG.DAILY_MESSAGE_LIMIT_NEW_ACCOUNT
+          : CONFIG.DAILY_MESSAGE_LIMIT_OLD_ACCOUNT
+      }, Session: ${counter?.count || 0}/${CONFIG.REST_AFTER_MESSAGES})`
+    );
+
+    res.json({
+      success: true,
+      messageId: sentMessage.key.id,
+      timestamp: sentMessage.messageTimestamp,
+      dailyCount: limitsInfo?.messageCount || 0,
+      dailyLimit: dailyCheck.isNewAccount
+        ? CONFIG.DAILY_MESSAGE_LIMIT_NEW_ACCOUNT
+        : CONFIG.DAILY_MESSAGE_LIMIT_OLD_ACCOUNT,
+    });
+  } catch (error) {
+    logger.error("Failed to send chat message:", error);
     res.status(500).json({ error: error.message });
   }
 });
