@@ -524,13 +524,21 @@ async function sendMessageWithHumanBehavior(accountId, jid, message) {
   return sentMessage;
 }
 
-// Process message queue for an account
+// Process message queue for an account with automatic rate limit handling
 async function processMessageQueue(accountId) {
   const queue = messageQueues.get(accountId);
-  if (!queue || queue.length === 0) return;
+  if (!queue || queue.length === 0) {
+    logger.debug(`Queue empty for ${accountId}`);
+    return;
+  }
 
   const clientInfo = clients.get(accountId);
-  if (!clientInfo || clientInfo.status !== "CONNECTED") return;
+  if (!clientInfo || clientInfo.status !== "CONNECTED") {
+    logger.warn(`Client ${accountId} not connected, queue paused (${queue.length} messages waiting)`);
+    // Retry in 10 seconds
+    setTimeout(() => processMessageQueue(accountId), 10000);
+    return;
+  }
 
   // Check if need rest
   const restCheck = checkNeedRest(accountId);
@@ -544,19 +552,47 @@ async function processMessageQueue(accountId) {
         CONFIG.REST_DURATION_MAX
       );
       logger.info(
-        `Account ${accountId} taking a break for ${Math.round(
+        `💤 Account ${accountId} taking a break for ${Math.round(
           restDuration / 1000
-        )} seconds after ${counter.count} messages`
+        )} seconds after ${counter.count} messages (${queue.length} messages in queue)`
       );
 
       setTimeout(() => {
         counter.isResting = false;
         counter.count = 0;
         counter.lastRest = Date.now();
-        logger.info(`Account ${accountId} finished resting, resuming...`);
+        logger.info(`✨ Account ${accountId} finished resting, resuming queue...`);
         processMessageQueue(accountId);
       }, restDuration);
     }
+    return;
+  }
+
+  // Check rate limit
+  const rateCheck = checkRateLimit(accountId);
+  if (!rateCheck.allowed) {
+    logger.warn(
+      `⏳ Rate limit reached for ${accountId}. Waiting ${rateCheck.resetIn}s (${queue.length} messages in queue)...`
+    );
+    // Wait for rate limit reset, then continue
+    setTimeout(() => {
+      logger.info(`🔄 Rate limit reset for ${accountId}, resuming queue...`);
+      processMessageQueue(accountId);
+    }, rateCheck.resetIn * 1000);
+    return;
+  }
+
+  // Check daily limit
+  const dailyCheck = await checkDailyLimit(accountId);
+  if (!dailyCheck.allowed) {
+    logger.error(
+      `🚫 Daily limit reached for ${accountId}: ${dailyCheck.reason} (${queue.length} messages in queue)`
+    );
+    // Check again in 1 hour
+    setTimeout(() => {
+      logger.info(`🔄 Checking daily limit for ${accountId} again...`);
+      processMessageQueue(accountId);
+    }, 3600000);
     return;
   }
 
@@ -568,6 +604,8 @@ async function processMessageQueue(accountId) {
     if (!msg.to.includes("@")) {
       jid = `${msg.to}@s.whatsapp.net`;
     }
+
+    logger.info(`📤 Processing message for ${accountId} to ${msg.to} (${queue.length} in queue)`);
 
     // Send message with human-like behavior
     const sentMessage = await sendMessageWithHumanBehavior(
@@ -605,9 +643,9 @@ async function processMessageQueue(accountId) {
     queue.shift();
 
     logger.info(
-      `Message sent from ${accountId} to ${msg.to} (${
+      `✅ Message sent from ${accountId} to ${msg.to} (Daily: ${limits?.messageCount || 0}, Session: ${
         counter ? counter.count : 0
-      } messages since last rest)`
+      }, Queue: ${queue.length} remaining)`
     );
 
     // Process next message with random delay
@@ -617,14 +655,16 @@ async function processMessageQueue(accountId) {
         CONFIG.DELAY_BETWEEN_MESSAGES_MAX
       );
       logger.debug(
-        `Waiting ${Math.round(nextDelay / 1000)}s before next message...`
+        `⏱️  Waiting ${Math.round(nextDelay / 1000)}s before next message...`
       );
       setTimeout(() => processMessageQueue(accountId), nextDelay);
+    } else {
+      logger.info(`🎉 Queue empty for ${accountId}`);
     }
 
     return sentMessage;
   } catch (error) {
-    logger.error(`Failed to send message from ${accountId}:`, error.message);
+    logger.error(`❌ Failed to send message from ${accountId}:`, error.message);
 
     msg.retries++;
 
@@ -643,22 +683,25 @@ async function processMessageQueue(accountId) {
 
       queue.shift();
       logger.error(
-        `Message permanently failed after ${CONFIG.MESSAGE_RETRY_COUNT} retries`
+        `🔴 Message permanently failed after ${CONFIG.MESSAGE_RETRY_COUNT} retries, skipping...`
       );
+
+      // Continue with next message
+      if (queue.length > 0) {
+        setTimeout(() => processMessageQueue(accountId), 2000);
+      }
     } else {
       // Retry later
+      logger.info(
+        `🔄 Retrying message (attempt ${msg.retries + 1}/${
+          CONFIG.MESSAGE_RETRY_COUNT
+        })`
+      );
       setTimeout(
         () => processMessageQueue(accountId),
         CONFIG.MESSAGE_RETRY_DELAY
       );
-      logger.info(
-        `Retrying message (attempt ${msg.retries + 1}/${
-          CONFIG.MESSAGE_RETRY_COUNT
-        })`
-      );
     }
-
-    throw error;
   }
 }
 
@@ -1119,7 +1162,7 @@ app.delete("/api/accounts/:id", async (req, res) => {
   }
 });
 
-// Send message with rate limiting, daily limits, and human-like behavior
+// Send message - always queues message for automatic processing
 app.post("/api/messages/send", async (req, res) => {
   try {
     const { accountId, to, message } = req.body;
@@ -1128,120 +1171,49 @@ app.post("/api/messages/send", async (req, res) => {
       return res.status(400).json({ error: "Missing required fields" });
     }
 
-    // Check rate limit (per minute)
-    const rateCheck = checkRateLimit(accountId);
-    if (!rateCheck.allowed) {
-      return res.status(429).json({
-        error: `Rate limit exceeded. Try again in ${rateCheck.resetIn} seconds`,
-        resetIn: rateCheck.resetIn,
-      });
-    }
-
-    // Check daily limit
-    const dailyCheck = await checkDailyLimit(accountId);
-    if (!dailyCheck.allowed) {
-      return res.status(429).json({
-        error: dailyCheck.reason,
-        isNewAccount: dailyCheck.isNewAccount,
-      });
-    }
-
     const clientInfo = clients.get(accountId);
     if (!clientInfo) {
       return res.status(400).json({ error: "Client not initialized" });
     }
 
-    if (clientInfo.status !== "CONNECTED") {
-      // Queue message for later
-      const messageId = enqueueMessage(accountId, to, message);
-      return res.status(202).json({
-        success: true,
-        queued: true,
-        messageId,
-        message: "Message queued for delivery when connected",
-      });
-    }
+    // Get current queue status
+    const queue = messageQueues.get(accountId) || [];
+    const queueLength = queue.length;
 
-    // Update last activity
-    clientInfo.lastActivity = Date.now();
+    // Always add to queue (система сама обработает с учетом лимитов)
+    const messageId = enqueueMessage(accountId, to, message);
 
-    // Format phone number (add @s.whatsapp.net if not present)
-    let jid = to;
-    if (!to.includes("@")) {
-      jid = `${to}@s.whatsapp.net`;
-    }
-
-    // Send message with human-like behavior
-    const sentMessage = await sendMessageWithHumanBehavior(
-      accountId,
-      jid,
-      message
-    );
-
-    // Save to database
-    await prisma.message.create({
-      data: {
-        accountId,
-        chatId: jid,
-        direction: "OUTGOING",
-        message,
-        to,
-        status: "SENT",
-        contactNumber: to,
-      },
-    });
-
-    // Increment daily counter
-    const limits = dailyLimits.get(accountId);
-    if (limits) {
-      limits.messageCount++;
-    }
-
-    // Increment message counter for rest periods
-    const counter = messageCounters.get(accountId);
-    if (counter) {
-      counter.count++;
-    }
-
-    const limitsInfo = dailyLimits.get(accountId);
     logger.info(
-      `Message sent from ${accountId} to ${to} (Daily: ${
-        limitsInfo?.messageCount || 0
-      }/${
-        dailyCheck.isNewAccount
-          ? CONFIG.DAILY_MESSAGE_LIMIT_NEW_ACCOUNT
-          : CONFIG.DAILY_MESSAGE_LIMIT_OLD_ACCOUNT
-      }, Session: ${counter?.count || 0}/${CONFIG.REST_AFTER_MESSAGES})`
+      `📥 Message queued for ${accountId} to ${to} (Queue: ${queueLength + 1} messages)`
     );
 
-    res.json({
+    // Start queue processing if not already running
+    // Проверяем, есть ли уже активная обработка очереди
+    if (queueLength === 0) {
+      logger.info(`🚀 Starting queue processor for ${accountId}`);
+      // Запускаем обработку через небольшую задержку
+      setTimeout(() => processMessageQueue(accountId), 100);
+    }
+
+    // Получаем информацию о лимитах
+    const dailyCheck = await checkDailyLimit(accountId);
+    const limitsInfo = dailyLimits.get(accountId);
+
+    res.status(202).json({
       success: true,
-      messageId: sentMessage.key.id,
-      timestamp: sentMessage.messageTimestamp,
+      queued: true,
+      messageId,
+      queuePosition: queueLength + 1,
+      queueLength: queueLength + 1,
+      message: "Message queued for automatic delivery",
+      status: clientInfo.status,
       dailyCount: limitsInfo?.messageCount || 0,
       dailyLimit: dailyCheck.isNewAccount
         ? CONFIG.DAILY_MESSAGE_LIMIT_NEW_ACCOUNT
         : CONFIG.DAILY_MESSAGE_LIMIT_OLD_ACCOUNT,
     });
   } catch (error) {
-    logger.error("Failed to send message:", error);
-
-    // Save failed message
-    try {
-      await prisma.message.create({
-        data: {
-          accountId: req.body.accountId,
-          message: req.body.message,
-          to: req.body.to,
-          direction: "OUTGOING",
-          status: "FAILED",
-          contactNumber: req.body.to,
-        },
-      });
-    } catch (dbError) {
-      logger.error("Failed to save failed message:", dbError);
-    }
-
+    logger.error("Failed to queue message:", error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -1353,7 +1325,7 @@ app.get("/api/accounts/:accountId/chats/:chatId", async (req, res) => {
   }
 });
 
-// Send message to a specific chat with human-like behavior
+// Send message to a specific chat - always queues message
 app.post("/api/accounts/:accountId/chats/:chatId", async (req, res) => {
   try {
     const { accountId, chatId } = req.params;
@@ -1364,93 +1336,92 @@ app.post("/api/accounts/:accountId/chats/:chatId", async (req, res) => {
       return res.status(400).json({ error: "Message is required" });
     }
 
-    // Check rate limit (per minute)
-    const rateCheck = checkRateLimit(accountId);
-    if (!rateCheck.allowed) {
-      return res.status(429).json({
-        error: `Rate limit exceeded. Try again in ${rateCheck.resetIn} seconds`,
-        resetIn: rateCheck.resetIn,
-      });
-    }
-
-    // Check daily limit
-    const dailyCheck = await checkDailyLimit(accountId);
-    if (!dailyCheck.allowed) {
-      return res.status(429).json({
-        error: dailyCheck.reason,
-        isNewAccount: dailyCheck.isNewAccount,
-      });
-    }
-
     const clientInfo = clients.get(accountId);
     if (!clientInfo) {
       return res.status(400).json({ error: "Client not initialized" });
     }
 
-    if (clientInfo.status !== "CONNECTED") {
-      return res.status(400).json({ error: "Client not connected" });
-    }
-
-    // Update last activity
-    clientInfo.lastActivity = Date.now();
-
-    // Send message with human-like behavior
-    const sentMessage = await sendMessageWithHumanBehavior(
-      accountId,
-      decodedChatId,
-      message
-    );
-
     // Extract contact number from chatId
     const contactNumber = decodedChatId.split("@")[0];
 
-    // Save to database
-    await prisma.message.create({
-      data: {
-        accountId,
-        chatId: decodedChatId,
-        direction: "OUTGOING",
-        message,
-        to: contactNumber,
-        status: "SENT",
-        contactNumber,
-      },
-    });
+    // Get current queue status
+    const queue = messageQueues.get(accountId) || [];
+    const queueLength = queue.length;
 
-    // Increment daily counter
-    const limits = dailyLimits.get(accountId);
-    if (limits) {
-      limits.messageCount++;
-    }
+    // Always add to queue
+    const messageId = enqueueMessage(accountId, contactNumber, message);
 
-    // Increment message counter for rest periods
-    const counter = messageCounters.get(accountId);
-    if (counter) {
-      counter.count++;
-    }
-
-    const limitsInfo = dailyLimits.get(accountId);
     logger.info(
-      `Message sent from ${accountId} to chat ${decodedChatId} (Daily: ${
-        limitsInfo?.messageCount || 0
-      }/${
-        dailyCheck.isNewAccount
-          ? CONFIG.DAILY_MESSAGE_LIMIT_NEW_ACCOUNT
-          : CONFIG.DAILY_MESSAGE_LIMIT_OLD_ACCOUNT
-      }, Session: ${counter?.count || 0}/${CONFIG.REST_AFTER_MESSAGES})`
+      `📥 Message queued for ${accountId} to chat ${decodedChatId} (Queue: ${queueLength + 1})`
     );
 
-    res.json({
+    // Start queue processing if not already running
+    if (queueLength === 0) {
+      logger.info(`🚀 Starting queue processor for ${accountId}`);
+      setTimeout(() => processMessageQueue(accountId), 100);
+    }
+
+    // Get limits info
+    const dailyCheck = await checkDailyLimit(accountId);
+    const limitsInfo = dailyLimits.get(accountId);
+
+    res.status(202).json({
       success: true,
-      messageId: sentMessage.key.id,
-      timestamp: sentMessage.messageTimestamp,
+      queued: true,
+      messageId,
+      queuePosition: queueLength + 1,
+      queueLength: queueLength + 1,
+      message: "Message queued for automatic delivery",
+      status: clientInfo.status,
       dailyCount: limitsInfo?.messageCount || 0,
       dailyLimit: dailyCheck.isNewAccount
         ? CONFIG.DAILY_MESSAGE_LIMIT_NEW_ACCOUNT
         : CONFIG.DAILY_MESSAGE_LIMIT_OLD_ACCOUNT,
     });
   } catch (error) {
-    logger.error("Failed to send chat message:", error);
+    logger.error("Failed to queue chat message:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get queue status for an account
+app.get("/api/accounts/:id/queue", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const queue = messageQueues.get(id) || [];
+    const counter = messageCounters.get(id);
+    const limitsInfo = dailyLimits.get(id);
+    const clientInfo = clients.get(id);
+
+    const dailyCheck = await checkDailyLimit(id);
+
+    res.json({
+      accountId: id,
+      queueLength: queue.length,
+      messages: queue.map((msg, index) => ({
+        position: index + 1,
+        to: msg.to,
+        message: msg.message.substring(0, 50) + (msg.message.length > 50 ? '...' : ''),
+        retries: msg.retries,
+        createdAt: new Date(msg.createdAt).toISOString(),
+      })),
+      status: {
+        clientStatus: clientInfo?.status || 'DISCONNECTED',
+        isResting: counter?.isResting || false,
+        messagesSinceRest: counter?.count || 0,
+        restThreshold: CONFIG.REST_AFTER_MESSAGES,
+      },
+      limits: {
+        dailyCount: limitsInfo?.messageCount || 0,
+        dailyLimit: dailyCheck.isNewAccount
+          ? CONFIG.DAILY_MESSAGE_LIMIT_NEW_ACCOUNT
+          : CONFIG.DAILY_MESSAGE_LIMIT_OLD_ACCOUNT,
+        isNewAccount: dailyCheck.isNewAccount,
+      },
+    });
+  } catch (error) {
+    logger.error("Failed to get queue status:", error);
     res.status(500).json({ error: error.message });
   }
 });
