@@ -8,7 +8,9 @@
       "Bash(find:*)",
       "Bash(npx prisma migrate:*)",
       "Bash(npx prisma db push)",
-      "Bash(node --check:*)"
+      "Bash(node --check:*)",
+      "Bash(curl:*)",
+      "Bash(node --version)"
     ],
     "deny": [],
     "ask": []

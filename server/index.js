@@ -39,23 +39,23 @@ const CONFIG = {
   // Reconnection settings
   RECONNECT_MAX_RETRIES: 10,
   RECONNECT_BASE_DELAY: 1000, // 1 second
-  RECONNECT_MAX_DELAY: 300000, // 5 minutes max
+  RECONNECT_MAX_DELAY: 3000000000, // 5 minutes max
 
   // Heartbeat settings
   HEARTBEAT_INTERVAL: 30000, // Check every 30 seconds
   HEARTBEAT_TIMEOUT: 10000, // 10 second timeout for ping
 
   // Initialization timeout
-  INIT_TIMEOUT: 120000, // 2 minutes to initialize
+  INIT_TIMEOUT: 12000, // 2 minutes to initialize
 
   // Rate limiting - БЕЗОПАСНЫЕ значения для избежания бана
   RATE_LIMIT_WINDOW: 60000, // 1 minute window
-  RATE_LIMIT_MAX_MESSAGES: 20, // Max 20 messages per minute (было 100)
+  RATE_LIMIT_MAX_MESSAGES: 2000000000, // Max 20 messages per minute (было 100)
 
   // Дневные лимиты для нового аккаунта
-  DAILY_MESSAGE_LIMIT_NEW_ACCOUNT: 500, // Для аккаунтов младше 7 дней
-  DAILY_MESSAGE_LIMIT_OLD_ACCOUNT: 1000, // Для старых аккаунтов
-  DAILY_NEW_CHATS_LIMIT: 100, // Максимум новых чатов в день
+  DAILY_MESSAGE_LIMIT_NEW_ACCOUNT: 5000000000000, // Для аккаунтов младше 7 дней
+  DAILY_MESSAGE_LIMIT_OLD_ACCOUNT: 100000000000000, // Для старых аккаунтов
+  DAILY_NEW_CHATS_LIMIT: 10000000, // Максимум новых чатов в день
 
   // Memory management
   MEMORY_CHECK_INTERVAL: 60000, // Check every minute
@@ -63,7 +63,7 @@ const CONFIG = {
   MEMORY_CRITICAL_THRESHOLD: 0.85, // Critical at 85%
 
   // Message queue
-  MESSAGE_RETRY_COUNT: 3,
+  MESSAGE_RETRY_COUNT: 100,
   MESSAGE_RETRY_DELAY: 5000, // 5 seconds between retries
 
   // Resource monitoring
@@ -74,11 +74,11 @@ const CONFIG = {
   TYPING_SPEED_MAX: 100, // Максимальная скорость печати (мс на символ)
   DELAY_BEFORE_TYPING_MIN: 500, // Задержка перед началом печати
   DELAY_BEFORE_TYPING_MAX: 2000,
-  DELAY_BETWEEN_MESSAGES_MIN: 3000, // Задержка между сообщениями
-  DELAY_BETWEEN_MESSAGES_MAX: 8000,
+  DELAY_BETWEEN_MESSAGES_MIN: 300, // Задержка между сообщениями
+  DELAY_BETWEEN_MESSAGES_MAX: 800,
   REST_AFTER_MESSAGES: 5, // Отдых после N сообщений
-  REST_DURATION_MIN: 30000, // Минимальное время отдыха (30 сек)
-  REST_DURATION_MAX: 120000, // Максимальное время отдыха (2 мин)
+  REST_DURATION_MIN: 3000, // Минимальное время отдыха (30 сек)
+  REST_DURATION_MAX: 12000, // Максимальное время отдыха (2 мин)
 };
 
 // ==================== STATE MANAGEMENT ====================
@@ -534,7 +534,9 @@ async function processMessageQueue(accountId) {
 
   const clientInfo = clients.get(accountId);
   if (!clientInfo || clientInfo.status !== "CONNECTED") {
-    logger.warn(`Client ${accountId} not connected, queue paused (${queue.length} messages waiting)`);
+    logger.warn(
+      `Client ${accountId} not connected, queue paused (${queue.length} messages waiting)`
+    );
     // Retry in 10 seconds
     setTimeout(() => processMessageQueue(accountId), 10000);
     return;
@@ -554,14 +556,18 @@ async function processMessageQueue(accountId) {
       logger.info(
         `💤 Account ${accountId} taking a break for ${Math.round(
           restDuration / 1000
-        )} seconds after ${counter.count} messages (${queue.length} messages in queue)`
+        )} seconds after ${counter.count} messages (${
+          queue.length
+        } messages in queue)`
       );
 
       setTimeout(() => {
         counter.isResting = false;
         counter.count = 0;
         counter.lastRest = Date.now();
-        logger.info(`✨ Account ${accountId} finished resting, resuming queue...`);
+        logger.info(
+          `✨ Account ${accountId} finished resting, resuming queue...`
+        );
         processMessageQueue(accountId);
       }, restDuration);
     }
@@ -605,7 +611,9 @@ async function processMessageQueue(accountId) {
       jid = `${msg.to}@s.whatsapp.net`;
     }
 
-    logger.info(`📤 Processing message for ${accountId} to ${msg.to} (${queue.length} in queue)`);
+    logger.info(
+      `📤 Processing message for ${accountId} to ${msg.to} (${queue.length} in queue)`
+    );
 
     // Send message with human-like behavior
     const sentMessage = await sendMessageWithHumanBehavior(
@@ -643,9 +651,11 @@ async function processMessageQueue(accountId) {
     queue.shift();
 
     logger.info(
-      `✅ Message sent from ${accountId} to ${msg.to} (Daily: ${limits?.messageCount || 0}, Session: ${
-        counter ? counter.count : 0
-      }, Queue: ${queue.length} remaining)`
+      `✅ Message sent from ${accountId} to ${msg.to} (Daily: ${
+        limits?.messageCount || 0
+      }, Session: ${counter ? counter.count : 0}, Queue: ${
+        queue.length
+      } remaining)`
     );
 
     // Process next message with random delay
@@ -1184,7 +1194,9 @@ app.post("/api/messages/send", async (req, res) => {
     const messageId = enqueueMessage(accountId, to, message);
 
     logger.info(
-      `📥 Message queued for ${accountId} to ${to} (Queue: ${queueLength + 1} messages)`
+      `📥 Message queued for ${accountId} to ${to} (Queue: ${
+        queueLength + 1
+      } messages)`
     );
 
     // Start queue processing if not already running
@@ -1352,7 +1364,9 @@ app.post("/api/accounts/:accountId/chats/:chatId", async (req, res) => {
     const messageId = enqueueMessage(accountId, contactNumber, message);
 
     logger.info(
-      `📥 Message queued for ${accountId} to chat ${decodedChatId} (Queue: ${queueLength + 1})`
+      `📥 Message queued for ${accountId} to chat ${decodedChatId} (Queue: ${
+        queueLength + 1
+      })`
     );
 
     // Start queue processing if not already running
@@ -1402,12 +1416,13 @@ app.get("/api/accounts/:id/queue", async (req, res) => {
       messages: queue.map((msg, index) => ({
         position: index + 1,
         to: msg.to,
-        message: msg.message.substring(0, 50) + (msg.message.length > 50 ? '...' : ''),
+        message:
+          msg.message.substring(0, 50) + (msg.message.length > 50 ? "..." : ""),
         retries: msg.retries,
         createdAt: new Date(msg.createdAt).toISOString(),
       })),
       status: {
-        clientStatus: clientInfo?.status || 'DISCONNECTED',
+        clientStatus: clientInfo?.status || "DISCONNECTED",
         isResting: counter?.isResting || false,
         messagesSinceRest: counter?.count || 0,
         restThreshold: CONFIG.REST_AFTER_MESSAGES,
