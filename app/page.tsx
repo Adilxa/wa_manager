@@ -27,6 +27,7 @@ interface Account {
   qrCode: string | null;
   clientStatus: string;
   hasActiveClient: boolean;
+  useLimits: boolean;
   createdAt: string;
 }
 
@@ -42,6 +43,7 @@ export default function Dashboard() {
   const [selectedAccount, setSelectedAccount] = useState<Account | null>(null);
   const [refreshInterval, setRefreshInterval] = useState<NodeJS.Timeout | null>(null);
   const [sending, setSending] = useState(false);
+  const [useLimits, setUseLimits] = useState(true);
 
   // Проверка авторизации
   useEffect(() => {
@@ -92,10 +94,11 @@ export default function Dashboard() {
       const response = await fetch(`${API_URL}/api/accounts`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: newAccountName }),
+        body: JSON.stringify({ name: newAccountName, useLimits }),
       });
       if (response.ok) {
         setNewAccountName('');
+        setUseLimits(true); // Reset to default
         await loadAccounts();
       }
     } catch (error) {
@@ -243,23 +246,34 @@ export default function Dashboard() {
             <Plus className="w-5 h-5" />
             Create New Account
           </h2>
-          <div className="flex gap-3">
-            <input
-              type="text"
-              value={newAccountName}
-              onChange={(e) => setNewAccountName(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && createAccount()}
-              placeholder="Enter account name..."
-              className="flex-1 px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-white/20 focus:border-white/50 transition"
-            />
-            <button
-              onClick={createAccount}
-              disabled={!newAccountName.trim()}
-              className="px-6 py-3 bg-white text-black rounded-lg font-medium hover:bg-gray-200 disabled:bg-gray-800 disabled:text-gray-500 disabled:cursor-not-allowed transition flex items-center gap-2"
-            >
-              <Plus className="w-4 h-4" />
-              Create
-            </button>
+          <div className="space-y-3">
+            <div className="flex gap-3">
+              <input
+                type="text"
+                value={newAccountName}
+                onChange={(e) => setNewAccountName(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && createAccount()}
+                placeholder="Enter account name..."
+                className="flex-1 px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-white/20 focus:border-white/50 transition"
+              />
+              <button
+                onClick={createAccount}
+                disabled={!newAccountName.trim()}
+                className="px-6 py-3 bg-white text-black rounded-lg font-medium hover:bg-gray-200 disabled:bg-gray-800 disabled:text-gray-500 disabled:cursor-not-allowed transition flex items-center gap-2"
+              >
+                <Plus className="w-4 h-4" />
+                Create
+              </button>
+            </div>
+            <label className="flex items-center gap-2 text-sm text-gray-400 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={useLimits}
+                onChange={(e) => setUseLimits(e.target.checked)}
+                className="w-4 h-4 rounded border-gray-600 bg-gray-800 text-white focus:ring-2 focus:ring-white/20"
+              />
+              <span>Use rate limits (recommended for new accounts)</span>
+            </label>
           </div>
         </div>
 

@@ -39,23 +39,23 @@ const CONFIG = {
   // Reconnection settings
   RECONNECT_MAX_RETRIES: 10,
   RECONNECT_BASE_DELAY: 1000, // 1 second
-  RECONNECT_MAX_DELAY: 3000000000, // 5 minutes max
+  RECONNECT_MAX_DELAY: 300000, // 5 minutes max
 
   // Heartbeat settings
   HEARTBEAT_INTERVAL: 30000, // Check every 30 seconds
   HEARTBEAT_TIMEOUT: 10000, // 10 second timeout for ping
 
   // Initialization timeout
-  INIT_TIMEOUT: 12000, // 2 minutes to initialize
+  INIT_TIMEOUT: 120000, // 2 minutes to initialize
 
   // Rate limiting - БЕЗОПАСНЫЕ значения для избежания бана
   RATE_LIMIT_WINDOW: 60000, // 1 minute window
-  RATE_LIMIT_MAX_MESSAGES: 2000000000, // Max 20 messages per minute (было 100)
+  RATE_LIMIT_MAX_MESSAGES: 20, // Max 20 messages per minute (было 100)
 
   // Дневные лимиты для нового аккаунта
-  DAILY_MESSAGE_LIMIT_NEW_ACCOUNT: 5000000000000, // Для аккаунтов младше 7 дней
-  DAILY_MESSAGE_LIMIT_OLD_ACCOUNT: 100000000000000, // Для старых аккаунтов
-  DAILY_NEW_CHATS_LIMIT: 10000000, // Максимум новых чатов в день
+  DAILY_MESSAGE_LIMIT_NEW_ACCOUNT: 500, // Для аккаунтов младше 7 дней
+  DAILY_MESSAGE_LIMIT_OLD_ACCOUNT: 1000, // Для старых аккаунтов
+  DAILY_NEW_CHATS_LIMIT: 100, // Максимум новых чатов в день
 
   // Memory management
   MEMORY_CHECK_INTERVAL: 60000, // Check every minute
@@ -63,7 +63,7 @@ const CONFIG = {
   MEMORY_CRITICAL_THRESHOLD: 0.85, // Critical at 85%
 
   // Message queue
-  MESSAGE_RETRY_COUNT: 100,
+  MESSAGE_RETRY_COUNT: 3,
   MESSAGE_RETRY_DELAY: 5000, // 5 seconds between retries
 
   // Resource monitoring
@@ -74,11 +74,11 @@ const CONFIG = {
   TYPING_SPEED_MAX: 100, // Максимальная скорость печати (мс на символ)
   DELAY_BEFORE_TYPING_MIN: 500, // Задержка перед началом печати
   DELAY_BEFORE_TYPING_MAX: 2000,
-  DELAY_BETWEEN_MESSAGES_MIN: 300, // Задержка между сообщениями
-  DELAY_BETWEEN_MESSAGES_MAX: 800,
+  DELAY_BETWEEN_MESSAGES_MIN: 3000, // Задержка между сообщениями
+  DELAY_BETWEEN_MESSAGES_MAX: 8000,
   REST_AFTER_MESSAGES: 5, // Отдых после N сообщений
-  REST_DURATION_MIN: 3000, // Минимальное время отдыха (30 сек)
-  REST_DURATION_MAX: 12000, // Максимальное время отдыха (2 мин)
+  REST_DURATION_MIN: 30000, // Минимальное время отдыха (30 сек)
+  REST_DURATION_MAX: 120000, // Максимальное время отдыха (2 мин)
 };
 
 // ==================== STATE MANAGEMENT ====================
@@ -167,7 +167,17 @@ function sleep(ms) {
 }
 
 // Check rate limit for account
-function checkRateLimit(accountId) {
+async function checkRateLimit(accountId) {
+  // Get account to check if limits should be applied
+  const account = await prisma.whatsAppAccount.findUnique({
+    where: { id: accountId },
+  });
+
+  // If useLimits is false, always allow
+  if (!account || !account.useLimits) {
+    return { allowed: true, noLimits: true };
+  }
+
   const now = Date.now();
 
   if (!rateLimiter.has(accountId)) {
@@ -223,6 +233,11 @@ async function checkDailyLimit(accountId) {
 
   if (!account) {
     return { allowed: false, reason: "Account not found" };
+  }
+
+  // If useLimits is false, always allow
+  if (!account.useLimits) {
+    return { allowed: true, isNewAccount: false, noLimits: true };
   }
 
   const accountAge = Date.now() - new Date(account.createdAt).getTime();
@@ -575,7 +590,7 @@ async function processMessageQueue(accountId) {
   }
 
   // Check rate limit
-  const rateCheck = checkRateLimit(accountId);
+  const rateCheck = await checkRateLimit(accountId);
   if (!rateCheck.allowed) {
     logger.warn(
       `⏳ Rate limit reached for ${accountId}. Waiting ${rateCheck.resetIn}s (${queue.length} messages in queue)...`
@@ -1038,11 +1053,11 @@ app.get("/api/accounts", async (req, res) => {
 // Create account
 app.post("/api/accounts", async (req, res) => {
   try {
-    const { name } = req.body;
+    const { name, useLimits = true } = req.body;
     const account = await prisma.whatsAppAccount.create({
-      data: { name },
+      data: { name, useLimits },
     });
-    logger.info(`Created account: ${account.id} (${name})`);
+    logger.info(`Created account: ${account.id} (${name}) - useLimits: ${useLimits}`);
     res.status(201).json(account);
   } catch (error) {
     logger.error("Failed to create account:", error);
@@ -1071,6 +1086,29 @@ app.get("/api/accounts/:id", async (req, res) => {
     });
   } catch (error) {
     logger.error("Failed to get account:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Update account
+app.put("/api/accounts/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, useLimits } = req.body;
+
+    const updateData = {};
+    if (name !== undefined) updateData.name = name;
+    if (useLimits !== undefined) updateData.useLimits = useLimits;
+
+    const account = await prisma.whatsAppAccount.update({
+      where: { id },
+      data: updateData,
+    });
+
+    logger.info(`Updated account: ${id} - ${JSON.stringify(updateData)}`);
+    res.json(account);
+  } catch (error) {
+    logger.error("Failed to update account:", error);
     res.status(500).json({ error: error.message });
   }
 });
