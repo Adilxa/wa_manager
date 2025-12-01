@@ -145,6 +145,26 @@ export default function Dashboard() {
     }
   };
 
+  // Изменение useLimits
+  const toggleUseLimits = async (accountId: string, currentValue: boolean) => {
+    try {
+      const response = await fetch(`${API_URL}/api/accounts/${accountId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ useLimits: !currentValue }),
+      });
+      if (response.ok) {
+        await loadAccounts();
+        if (selectedAccount?.id === accountId) {
+          const updated = await response.json();
+          setSelectedAccount(updated);
+        }
+      }
+    } catch (error) {
+      console.error('Failed to toggle limits:', error);
+    }
+  };
+
   // Удаление
   const deleteAccount = async (accountId: string) => {
     if (!confirm('Delete this account?')) return;
@@ -332,6 +352,11 @@ export default function Dashboard() {
                               {account.phoneNumber}
                             </p>
                           )}
+                          <div className="flex items-center gap-2 mt-2">
+                            <span className={`text-xs px-2 py-0.5 rounded-full ${account.useLimits ? 'bg-yellow-500/10 text-yellow-400' : 'bg-green-500/10 text-green-400'}`}>
+                              {account.useLimits ? '⚡ With Limits' : '🚀 No Limits'}
+                            </span>
+                          </div>
                         </div>
                         <div className={`flex items-center gap-2 px-3 py-1 rounded-full text-xs font-medium ${status.bg} ${status.color}`}>
                           <StatusIcon className={`w-3 h-3 ${status.label.includes('Connecting') ? 'animate-spin' : ''}`} />
@@ -427,6 +452,33 @@ export default function Dashboard() {
                           </>
                         );
                       })()}
+                    </div>
+                  </div>
+
+                  {/* Rate Limits Toggle */}
+                  <div className="pt-3 border-t border-gray-800">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="text-sm text-gray-500">Rate Limits</p>
+                        <p className="text-xs text-gray-600 mt-0.5">
+                          {selectedAccount.useLimits ? 'Limited sending (safe)' : 'Unlimited sending'}
+                        </p>
+                      </div>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          toggleUseLimits(selectedAccount.id, selectedAccount.useLimits);
+                        }}
+                        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                          selectedAccount.useLimits ? 'bg-yellow-500' : 'bg-green-500'
+                        }`}
+                      >
+                        <span
+                          className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                            selectedAccount.useLimits ? 'translate-x-6' : 'translate-x-1'
+                          }`}
+                        />
+                      </button>
                     </div>
                   </div>
                 </div>
