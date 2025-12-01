@@ -16,7 +16,8 @@ import {
   Clock,
   User,
   Hash,
-  RefreshCw
+  RefreshCw,
+  Copy
 } from 'lucide-react';
 
 interface Account {
@@ -162,6 +163,18 @@ export default function Dashboard() {
       }
     } catch (error) {
       console.error('Failed to toggle limits:', error);
+    }
+  };
+
+  // Копирование ссылки на QR
+  const copyQRLink = async (accountId: string) => {
+    const link = `${window.location.origin}/qr/${accountId}`;
+    try {
+      await navigator.clipboard.writeText(link);
+      alert('QR link copied to clipboard!');
+    } catch (error) {
+      console.error('Failed to copy link:', error);
+      alert('Failed to copy link');
     }
   };
 
@@ -390,6 +403,17 @@ export default function Dashboard() {
                             Disconnect
                           </button>
                         )}
+
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            copyQRLink(account.id);
+                          }}
+                          className="px-3 py-2 bg-blue-500/10 text-blue-400 rounded-lg text-sm font-medium hover:bg-blue-500/20 transition flex items-center gap-1"
+                          title="Copy QR Link"
+                        >
+                          <Copy className="w-3 h-3" />
+                        </button>
 
                         <button
                           onClick={(e) => {
