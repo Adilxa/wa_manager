@@ -259,7 +259,17 @@ async function checkDailyLimit(accountId) {
 }
 
 // Check if account needs rest
-function checkNeedRest(accountId) {
+async function checkNeedRest(accountId) {
+  // Get account to check if limits should be applied
+  const account = await prisma.whatsAppAccount.findUnique({
+    where: { id: accountId },
+  });
+
+  // If useLimits is false, never rest
+  if (!account || !account.useLimits) {
+    return { needRest: false, noLimits: true };
+  }
+
   if (!messageCounters.has(accountId)) {
     messageCounters.set(accountId, {
       count: 0,
@@ -497,6 +507,21 @@ async function sendMessageWithHumanBehavior(accountId, jid, message) {
     throw new Error("Client not connected");
   }
 
+  // Check if account uses limits
+  const account = await prisma.whatsAppAccount.findUnique({
+    where: { id: accountId },
+  });
+
+  // If no limits, send immediately without delays
+  if (account && !account.useLimits) {
+    const sentMessage = await clientInfo.sock.sendMessage(jid, {
+      text: message,
+    });
+    logger.info(`Message sent instantly (no limits) to ${jid}`);
+    return sentMessage;
+  }
+
+  // With limits - use human-like behavior
   // 1. Случайная задержка перед началом печати (думаем, что написать)
   const delayBeforeTyping = randomDelay(
     CONFIG.DELAY_BEFORE_TYPING_MIN,
@@ -558,7 +583,7 @@ async function processMessageQueue(accountId) {
   }
 
   // Check if need rest
-  const restCheck = checkNeedRest(accountId);
+  const restCheck = await checkNeedRest(accountId);
   if (restCheck.needRest) {
     const counter = messageCounters.get(accountId);
     if (!counter.isResting) {
@@ -673,16 +698,28 @@ async function processMessageQueue(accountId) {
       } remaining)`
     );
 
-    // Process next message with random delay
+    // Process next message with random delay (or immediately if no limits)
     if (queue.length > 0) {
-      const nextDelay = randomDelay(
-        CONFIG.DELAY_BETWEEN_MESSAGES_MIN,
-        CONFIG.DELAY_BETWEEN_MESSAGES_MAX
-      );
-      logger.debug(
-        `⏱️  Waiting ${Math.round(nextDelay / 1000)}s before next message...`
-      );
-      setTimeout(() => processMessageQueue(accountId), nextDelay);
+      // Check if account has limits
+      const account = await prisma.whatsAppAccount.findUnique({
+        where: { id: accountId },
+      });
+
+      if (account && !account.useLimits) {
+        // No limits - process immediately
+        logger.debug(`⚡ Processing next message immediately (no limits)...`);
+        setTimeout(() => processMessageQueue(accountId), 100);
+      } else {
+        // With limits - use delay
+        const nextDelay = randomDelay(
+          CONFIG.DELAY_BETWEEN_MESSAGES_MIN,
+          CONFIG.DELAY_BETWEEN_MESSAGES_MAX
+        );
+        logger.debug(
+          `⏱️  Waiting ${Math.round(nextDelay / 1000)}s before next message...`
+        );
+        setTimeout(() => processMessageQueue(accountId), nextDelay);
+      }
     } else {
       logger.info(`🎉 Queue empty for ${accountId}`);
     }
