@@ -23,6 +23,27 @@ services:
       timeout: 5s
       retries: 5
 
+  redis:
+    image: redis:7-alpine
+    container_name: wa-redis
+    restart: unless-stopped
+
+    volumes:
+      - redis_data:/data
+
+    # Порт не пробрасываем наружу - только для внутренней Docker сети
+    # ports:
+    #   - "6379:6379"
+
+    # Redis persistence configuration
+    command: redis-server --appendonly yes --appendfsync everysec
+
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   wa-manager:
     build:
       context: .
@@ -33,6 +54,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
 
     ports:
       - "3000:3000"    # Next.js UI
@@ -42,6 +65,11 @@ services:
       # Database
       DATABASE_URL: ${DATABASE_URL}
       DIRECT_URL: ${DIRECT_URL}
+
+      # Redis (для BullMQ)
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
 
       # Next.js
       NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-http://localhost:3000}
@@ -80,6 +108,8 @@ services:
 
 volumes:
   postgres_data:
+    driver: local
+  redis_data:
     driver: local
   baileys_auth:
     driver: local

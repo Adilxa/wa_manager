@@ -2,13 +2,24 @@
 
 ## Быстрый старт для тестирования
 
-### 1. Запустить Redis (Docker - самый простой способ)
+### 1. Запустить всё через Docker Compose (рекомендуется!)
 
 ```bash
-docker run -d -p 6379:6379 --name redis redis:latest
+# Создать .env файл
+cp .env.example .env
+
+# Запустить PostgreSQL + Redis + WA Manager
+docker-compose up -d
+
+# Проверить что всё запущено
+docker-compose ps
 ```
 
-Или установить локально: https://redis.io/docs/install/
+**Или** запустить только Redis отдельно:
+
+```bash
+docker run -d -p 6379:6379 --name wa-redis redis:7-alpine
+```
 
 ### 2. Установить зависимости
 

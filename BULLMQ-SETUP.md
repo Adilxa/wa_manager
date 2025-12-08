@@ -26,7 +26,28 @@
 
 ### 1. Установить Redis
 
-#### На Ubuntu/Debian:
+#### Рекомендуется: Docker Compose (уже настроен!)
+
+Redis уже добавлен в `docker-compose.yml`. Просто запусти:
+
+```bash
+docker-compose up -d
+```
+
+Это запустит:
+- ✅ PostgreSQL (контейнер: wa-postgres)
+- ✅ Redis (контейнер: wa-redis)
+- ✅ WA Manager (контейнер: wa-manager)
+
+Redis настроен с:
+- Имя контейнера: `wa-redis`
+- Внутренний порт: 6379
+- Persistence: AOF (appendonly yes)
+- Healthcheck: автоматический
+
+#### Альтернатива: Установка локально
+
+На Ubuntu/Debian:
 ```bash
 sudo apt update
 sudo apt install redis-server
@@ -34,18 +55,19 @@ sudo systemctl start redis
 sudo systemctl enable redis
 ```
 
-#### На macOS:
+На macOS:
 ```bash
 brew install redis
 brew services start redis
 ```
 
-#### На Windows:
+На Windows:
 Скачайте Redis for Windows: https://github.com/microsoftarchive/redis/releases
 
-Или используйте Docker:
+#### Альтернатива: Standalone Docker
+
 ```bash
-docker run -d -p 6379:6379 --name redis redis:latest
+docker run -d -p 6379:6379 --name wa-redis redis:7-alpine
 ```
 
 ### 2. Установить зависимости Node.js
@@ -60,17 +82,26 @@ npm install
 
 ### 3. Настроить переменные окружения
 
-Создайте или обновите `.env`:
+Создайте `.env` из `.env.example`:
 
+```bash
+cp .env.example .env
+```
+
+Для Docker Compose (уже настроено):
 ```env
-# Redis Configuration
+# Redis Configuration (для Docker Compose)
+REDIS_HOST=redis
+REDIS_PORT=6379
+REDIS_PASSWORD=
+```
+
+Для локальной разработки:
+```env
+# Redis Configuration (локально)
 REDIS_HOST=localhost
 REDIS_PORT=6379
-REDIS_PASSWORD=  # Оставьте пустым если нет пароля
-
-# Existing configs...
-DATABASE_URL=...
-API_PORT=5001
+REDIS_PASSWORD=
 ```
 
 ### 4. Применить миграции базы данных
