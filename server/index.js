@@ -103,9 +103,6 @@ const dailyLimits = new Map();
 // Message counters for rest periods
 const messageCounters = new Map();
 
-// Message queue for retry logic
-const messageQueues = new Map();
-
 // Graceful shutdown flag
 let isShuttingDown = false;
 
@@ -1249,7 +1246,7 @@ app.delete("/api/accounts/:id", async (req, res) => {
   }
 });
 
-// Send message - always queues message for automatic processing
+// Send message - uses BullMQ for reliability
 app.post("/api/messages/send", async (req, res) => {
   try {
     const { accountId, to, message } = req.body;
@@ -1263,38 +1260,70 @@ app.post("/api/messages/send", async (req, res) => {
       return res.status(400).json({ error: "Client not initialized" });
     }
 
-    // Get current queue status
-    const queue = messageQueues.get(accountId) || [];
-    const queueLength = queue.length;
-
-    // Always add to queue (система сама обработает с учетом лимитов)
-    const messageId = enqueueMessage(accountId, to, message);
-
-    logger.info(
-      `📥 Message queued for ${accountId} to ${to} (Queue: ${
-        queueLength + 1
-      } messages)`
-    );
-
-    // Start queue processing if not already running
-    // Проверяем, есть ли уже активная обработка очереди
-    if (queueLength === 0) {
-      logger.info(`🚀 Starting queue processor for ${accountId}`);
-      // Запускаем обработку через небольшую задержку
-      setTimeout(() => processMessageQueue(accountId), 100);
+    if (clientInfo.status !== 'CONNECTED') {
+      return res.status(400).json({ error: "Account not connected" });
     }
 
-    // Получаем информацию о лимитах
+    // Create a temporary single-message contract
+    const tempContract = await prisma.contract.create({
+      data: {
+        accountId,
+        name: `Single message to ${to}`,
+        totalCount: 1,
+        pendingCount: 1,
+        status: 'PENDING',
+        recipients: {
+          create: {
+            phoneNumber: to,
+            message: message,
+            status: 'PENDING'
+          }
+        }
+      },
+      include: {
+        recipients: true
+      }
+    });
+
+    // Add to BullMQ message queue directly (skip contract queue)
+    const recipient = tempContract.recipients[0];
+
+    const job = await messageQueue.add(`msg-${to}`, {
+      contractId: tempContract.id,
+      recipientId: recipient.id,
+      accountId,
+      phoneNumber: to,
+      message: message,
+    }, {
+      priority: 10, // Higher priority than contract messages
+    });
+
+    // Mark contract as IN_PROGRESS
+    await prisma.contract.update({
+      where: { id: tempContract.id },
+      data: {
+        status: 'IN_PROGRESS',
+        startedAt: new Date()
+      }
+    });
+
+    logger.info(`📥 Single message queued via BullMQ for ${accountId} to ${to}, Job ID: ${job.id}`);
+
+    // Get queue stats
+    const queueCounts = await messageQueue.getJobCounts();
     const dailyCheck = await checkDailyLimit(accountId);
     const limitsInfo = dailyLimits.get(accountId);
 
     res.status(202).json({
       success: true,
       queued: true,
-      messageId,
-      queuePosition: queueLength + 1,
-      queueLength: queueLength + 1,
-      message: "Message queued for automatic delivery",
+      messageId: tempContract.id,  // ← Для обратной совместимости
+      contractId: tempContract.id,
+      recipientId: recipient.id,
+      jobId: job.id,
+      queuePosition: queueCounts.waiting + 1,
+      queueLength: queueCounts.waiting + queueCounts.active,
+      message: "Message queued via BullMQ for reliable delivery",
       status: clientInfo.status,
       dailyCount: limitsInfo?.messageCount || 0,
       dailyLimit: dailyCheck.isNewAccount

@@ -31,6 +31,35 @@ curl http://localhost:5001/api/queues/status
 
 ## Использование
 
+### 0. Отправить одиночное сообщение (тоже через BullMQ!)
+
+```bash
+curl -X POST http://your-server:5001/api/messages/send \
+  -H "Content-Type: application/json" \
+  -d '{
+    "accountId": "YOUR_ACCOUNT_ID",
+    "to": "79991234567",
+    "message": "Привет! Это срочное сообщение"
+  }'
+```
+
+**Что происходит:**
+- Создается temporary contract (1 сообщение)
+- Добавляется в BullMQ с **высоким приоритетом**
+- Отправится раньше чем сообщения из больших контрактов
+- Все те же фичи: retry, rate limiting, статистика
+
+**Response:**
+```json
+{
+  "success": true,
+  "contractId": "contract_temp_123",
+  "jobId": "msg-79991234567",
+  "queuePosition": 1,
+  "message": "Message queued via BullMQ for reliable delivery"
+}
+```
+
 ### 1. Создать контракт
 
 ```bash
