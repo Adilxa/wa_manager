@@ -104,6 +104,9 @@ const messageCounters = new Map();
 // Message queue for retry logic
 const messageQueues = new Map();
 
+// Contract processing tracker
+const activeContracts = new Map();
+
 // Graceful shutdown flag
 let isShuttingDown = false;
 
@@ -764,6 +767,269 @@ async function processMessageQueue(accountId) {
         CONFIG.MESSAGE_RETRY_DELAY
       );
     }
+  }
+}
+
+// ==================== CONTRACT PROCESSING ====================
+
+// Process contract - send messages to all recipients
+async function processContract(contractId) {
+  if (isShuttingDown) return;
+
+  const contractInfo = activeContracts.get(contractId);
+  if (!contractInfo) {
+    logger.error(`Contract ${contractId} not found in active contracts`);
+    return;
+  }
+
+  try {
+    // Get contract from database
+    const contract = await prisma.contract.findUnique({
+      where: { id: contractId },
+      include: {
+        recipients: {
+          where: { status: { in: ['PENDING', 'FAILED'] } },
+          orderBy: { createdAt: 'asc' }
+        }
+      }
+    });
+
+    if (!contract) {
+      logger.error(`Contract ${contractId} not found in database`);
+      activeContracts.delete(contractId);
+      return;
+    }
+
+    const accountId = contract.accountId;
+    const clientInfo = clients.get(accountId);
+
+    if (!clientInfo || clientInfo.status !== 'CONNECTED') {
+      logger.warn(`Client ${accountId} not connected, pausing contract ${contractId}`);
+      await prisma.contract.update({
+        where: { id: contractId },
+        data: { status: 'PAUSED' }
+      });
+      contractInfo.status = 'PAUSED';
+      return;
+    }
+
+    // Update contract status to IN_PROGRESS
+    if (contract.status === 'PENDING') {
+      await prisma.contract.update({
+        where: { id: contractId },
+        data: {
+          status: 'IN_PROGRESS',
+          startedAt: new Date()
+        }
+      });
+    }
+
+    logger.info(`📋 Processing contract ${contract.name} (${contractId}): ${contract.recipients.length} recipients pending`);
+
+    // Process each recipient
+    for (const recipient of contract.recipients) {
+      if (isShuttingDown || contractInfo.status === 'PAUSED') {
+        logger.info(`Contract ${contractId} paused or shutting down`);
+        break;
+      }
+
+      try {
+        // Update recipient status to QUEUED
+        await prisma.contractRecipient.update({
+          where: { id: recipient.id },
+          data: {
+            status: 'QUEUED',
+            attempts: recipient.attempts + 1,
+            lastAttempt: new Date()
+          }
+        });
+
+        // Check rate limit
+        const rateCheck = await checkRateLimit(accountId);
+        if (!rateCheck.allowed) {
+          logger.warn(`⏳ Rate limit reached for contract ${contractId}. Waiting ${rateCheck.resetIn}s...`);
+          await sleep(rateCheck.resetIn * 1000);
+        }
+
+        // Check daily limit
+        const dailyCheck = await checkDailyLimit(accountId);
+        if (!dailyCheck.allowed) {
+          logger.error(`🚫 Daily limit reached for contract ${contractId}: ${dailyCheck.reason}`);
+          await prisma.contract.update({
+            where: { id: contractId },
+            data: { status: 'PAUSED' }
+          });
+          contractInfo.status = 'PAUSED';
+          break;
+        }
+
+        // Check if need rest
+        const restCheck = await checkNeedRest(accountId);
+        if (restCheck.needRest && !restCheck.noLimits) {
+          const counter = messageCounters.get(accountId);
+          if (!counter.isResting) {
+            counter.isResting = true;
+            const restDuration = randomDelay(CONFIG.REST_DURATION_MIN, CONFIG.REST_DURATION_MAX);
+            logger.info(`💤 Contract ${contractId} taking a break for ${Math.round(restDuration / 1000)}s after ${counter.count} messages`);
+
+            await sleep(restDuration);
+
+            counter.isResting = false;
+            counter.count = 0;
+            counter.lastRest = Date.now();
+            logger.info(`✨ Contract ${contractId} resuming after rest...`);
+          }
+        }
+
+        // Update recipient status to SENDING
+        await prisma.contractRecipient.update({
+          where: { id: recipient.id },
+          data: { status: 'SENDING' }
+        });
+
+        // Format JID
+        let jid = recipient.phoneNumber;
+        if (!jid.includes('@')) {
+          jid = `${jid}@s.whatsapp.net`;
+        }
+
+        logger.info(`📤 Sending to ${recipient.phoneNumber} (Contract: ${contract.name})`);
+
+        // Send message with human-like behavior
+        const sentMessage = await sendMessageWithHumanBehavior(
+          accountId,
+          jid,
+          recipient.message
+        );
+
+        // Save to database
+        const dbMessage = await prisma.message.create({
+          data: {
+            accountId,
+            chatId: jid,
+            direction: 'OUTGOING',
+            message: recipient.message,
+            to: recipient.phoneNumber,
+            status: 'SENT',
+            contactNumber: recipient.phoneNumber,
+          }
+        });
+
+        // Update recipient status to SUCCESS
+        await prisma.contractRecipient.update({
+          where: { id: recipient.id },
+          data: {
+            status: 'SUCCESS',
+            messageId: dbMessage.id,
+            sentAt: new Date()
+          }
+        });
+
+        // Update contract counters
+        await prisma.contract.update({
+          where: { id: contractId },
+          data: {
+            successCount: { increment: 1 },
+            pendingCount: { decrement: 1 }
+          }
+        });
+
+        // Increment daily counter
+        const limits = dailyLimits.get(accountId);
+        if (limits) {
+          limits.messageCount++;
+        }
+
+        // Increment message counter for rest periods
+        const counter = messageCounters.get(accountId);
+        if (counter) {
+          counter.count++;
+        }
+
+        logger.info(`✅ SUCCESS: ${recipient.phoneNumber} (Contract: ${contract.name})`);
+
+        // Get account to check if limits should be applied
+        const account = await prisma.whatsAppAccount.findUnique({
+          where: { id: accountId }
+        });
+
+        // Add delay between messages if limits are enabled
+        if (account && account.useLimits) {
+          const nextDelay = randomDelay(
+            CONFIG.DELAY_BETWEEN_MESSAGES_MIN,
+            CONFIG.DELAY_BETWEEN_MESSAGES_MAX
+          );
+          logger.debug(`⏱️  Waiting ${Math.round(nextDelay / 1000)}s before next message...`);
+          await sleep(nextDelay);
+        } else {
+          // Small delay even without limits to prevent overwhelming
+          await sleep(100);
+        }
+
+      } catch (error) {
+        logger.error(`❌ FAILED: ${recipient.phoneNumber} - ${error.message}`);
+
+        // Update recipient status to FAILED
+        await prisma.contractRecipient.update({
+          where: { id: recipient.id },
+          data: {
+            status: 'FAILED',
+            errorMessage: error.message
+          }
+        });
+
+        // Update contract counters
+        await prisma.contract.update({
+          where: { id: contractId },
+          data: {
+            failureCount: { increment: 1 },
+            pendingCount: { decrement: 1 }
+          }
+        });
+
+        // Continue with next recipient after short delay
+        await sleep(2000);
+      }
+    }
+
+    // Check if contract is completed
+    const updatedContract = await prisma.contract.findUnique({
+      where: { id: contractId },
+      include: {
+        recipients: {
+          where: { status: { in: ['PENDING', 'QUEUED', 'SENDING'] } }
+        }
+      }
+    });
+
+    if (updatedContract.recipients.length === 0) {
+      // Contract completed
+      await prisma.contract.update({
+        where: { id: contractId },
+        data: {
+          status: 'COMPLETED',
+          completedAt: new Date()
+        }
+      });
+
+      logger.info(`🎉 CONTRACT COMPLETED: ${contract.name}`);
+      logger.info(`   ✅ Success: ${updatedContract.successCount}`);
+      logger.info(`   ❌ Failed: ${updatedContract.failureCount}`);
+
+      activeContracts.delete(contractId);
+    } else {
+      logger.info(`⏸️  Contract ${contractId} paused with ${updatedContract.recipients.length} pending`);
+    }
+
+  } catch (error) {
+    logger.error(`Error processing contract ${contractId}:`, error);
+
+    await prisma.contract.update({
+      where: { id: contractId },
+      data: { status: 'FAILED' }
+    });
+
+    activeContracts.delete(contractId);
   }
 }
 
@@ -1512,6 +1778,335 @@ app.get("/api/accounts/:id/queue", async (req, res) => {
     });
   } catch (error) {
     logger.error("Failed to get queue status:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ==================== CONTRACT API ROUTES ====================
+
+// Create a new contract
+app.post("/api/contracts", async (req, res) => {
+  try {
+    const { accountId, name, recipients } = req.body;
+
+    if (!accountId || !name || !recipients || !Array.isArray(recipients)) {
+      return res.status(400).json({ error: "Missing required fields" });
+    }
+
+    if (recipients.length === 0) {
+      return res.status(400).json({ error: "Recipients array cannot be empty" });
+    }
+
+    // Validate recipients format
+    for (const recipient of recipients) {
+      if (!recipient.phoneNumber || !recipient.message) {
+        return res.status(400).json({
+          error: "Each recipient must have phoneNumber and message"
+        });
+      }
+    }
+
+    // Check if account exists
+    const account = await prisma.whatsAppAccount.findUnique({
+      where: { id: accountId }
+    });
+
+    if (!account) {
+      return res.status(404).json({ error: "Account not found" });
+    }
+
+    // Create contract with recipients
+    const contract = await prisma.contract.create({
+      data: {
+        accountId,
+        name,
+        totalCount: recipients.length,
+        pendingCount: recipients.length,
+        status: 'PENDING',
+        recipients: {
+          create: recipients.map(r => ({
+            phoneNumber: r.phoneNumber,
+            message: r.message,
+            status: 'PENDING'
+          }))
+        }
+      },
+      include: {
+        recipients: true
+      }
+    });
+
+    logger.info(`Created contract: ${contract.name} (${contract.id}) with ${recipients.length} recipients`);
+
+    res.status(201).json(contract);
+  } catch (error) {
+    logger.error("Failed to create contract:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get all contracts
+app.get("/api/contracts", async (req, res) => {
+  try {
+    const { accountId, status } = req.query;
+
+    const where = {};
+    if (accountId) where.accountId = accountId;
+    if (status) where.status = status;
+
+    const contracts = await prisma.contract.findMany({
+      where,
+      include: {
+        account: {
+          select: { id: true, name: true, phoneNumber: true }
+        },
+        _count: {
+          select: { recipients: true }
+        }
+      },
+      orderBy: { createdAt: 'desc' }
+    });
+
+    res.json(contracts);
+  } catch (error) {
+    logger.error("Failed to get contracts:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get contract by ID with full details
+app.get("/api/contracts/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const contract = await prisma.contract.findUnique({
+      where: { id },
+      include: {
+        account: {
+          select: { id: true, name: true, phoneNumber: true }
+        },
+        recipients: {
+          orderBy: { createdAt: 'asc' }
+        }
+      }
+    });
+
+    if (!contract) {
+      return res.status(404).json({ error: "Contract not found" });
+    }
+
+    res.json(contract);
+  } catch (error) {
+    logger.error("Failed to get contract:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Start/Resume contract processing
+app.post("/api/contracts/:id/start", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const contract = await prisma.contract.findUnique({
+      where: { id },
+      include: {
+        recipients: {
+          where: { status: { in: ['PENDING', 'FAILED'] } }
+        }
+      }
+    });
+
+    if (!contract) {
+      return res.status(404).json({ error: "Contract not found" });
+    }
+
+    if (contract.status === 'COMPLETED') {
+      return res.status(400).json({ error: "Contract already completed" });
+    }
+
+    if (contract.recipients.length === 0) {
+      return res.status(400).json({ error: "No pending recipients to process" });
+    }
+
+    // Check if account is connected
+    const clientInfo = clients.get(contract.accountId);
+    if (!clientInfo || clientInfo.status !== 'CONNECTED') {
+      return res.status(400).json({ error: "Account not connected" });
+    }
+
+    // Update contract status
+    await prisma.contract.update({
+      where: { id },
+      data: { status: 'IN_PROGRESS' }
+    });
+
+    // Add to active contracts
+    activeContracts.set(id, {
+      contractId: id,
+      status: 'IN_PROGRESS',
+      startedAt: Date.now()
+    });
+
+    // Start processing in background
+    processContract(id).catch(err => {
+      logger.error(`Error in contract processing ${id}:`, err);
+    });
+
+    logger.info(`Started contract processing: ${contract.name} (${id})`);
+
+    res.json({
+      success: true,
+      message: "Contract processing started",
+      contractId: id,
+      pendingRecipients: contract.recipients.length
+    });
+  } catch (error) {
+    logger.error("Failed to start contract:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Pause contract processing
+app.post("/api/contracts/:id/pause", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const contract = await prisma.contract.findUnique({
+      where: { id }
+    });
+
+    if (!contract) {
+      return res.status(404).json({ error: "Contract not found" });
+    }
+
+    if (contract.status !== 'IN_PROGRESS') {
+      return res.status(400).json({ error: "Contract is not in progress" });
+    }
+
+    // Update contract status
+    await prisma.contract.update({
+      where: { id },
+      data: { status: 'PAUSED' }
+    });
+
+    // Update active contract
+    const contractInfo = activeContracts.get(id);
+    if (contractInfo) {
+      contractInfo.status = 'PAUSED';
+    }
+
+    logger.info(`Paused contract: ${contract.name} (${id})`);
+
+    res.json({
+      success: true,
+      message: "Contract paused"
+    });
+  } catch (error) {
+    logger.error("Failed to pause contract:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get contract statistics
+app.get("/api/contracts/:id/stats", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const contract = await prisma.contract.findUnique({
+      where: { id },
+      include: {
+        recipients: true
+      }
+    });
+
+    if (!contract) {
+      return res.status(404).json({ error: "Contract not found" });
+    }
+
+    // Group recipients by status
+    const successRecipients = contract.recipients.filter(r => r.status === 'SUCCESS');
+    const failedRecipients = contract.recipients.filter(r => r.status === 'FAILED');
+    const pendingRecipients = contract.recipients.filter(r =>
+      ['PENDING', 'QUEUED', 'SENDING'].includes(r.status)
+    );
+
+    const stats = {
+      contractId: id,
+      name: contract.name,
+      status: contract.status,
+      total: contract.totalCount,
+      success: contract.successCount,
+      failed: contract.failureCount,
+      pending: pendingRecipients.length,
+
+      successRate: contract.totalCount > 0
+        ? ((contract.successCount / contract.totalCount) * 100).toFixed(2) + '%'
+        : '0%',
+
+      successPhoneNumbers: successRecipients.map(r => ({
+        phoneNumber: r.phoneNumber,
+        sentAt: r.sentAt
+      })),
+
+      failedPhoneNumbers: failedRecipients.map(r => ({
+        phoneNumber: r.phoneNumber,
+        errorMessage: r.errorMessage,
+        attempts: r.attempts
+      })),
+
+      pendingPhoneNumbers: pendingRecipients.map(r => ({
+        phoneNumber: r.phoneNumber,
+        status: r.status
+      })),
+
+      duration: contract.startedAt
+        ? Math.round((new Date() - new Date(contract.startedAt)) / 1000) + 's'
+        : null,
+
+      createdAt: contract.createdAt,
+      startedAt: contract.startedAt,
+      completedAt: contract.completedAt
+    };
+
+    res.json(stats);
+  } catch (error) {
+    logger.error("Failed to get contract stats:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Delete contract
+app.delete("/api/contracts/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const contract = await prisma.contract.findUnique({
+      where: { id }
+    });
+
+    if (!contract) {
+      return res.status(404).json({ error: "Contract not found" });
+    }
+
+    // Pause if in progress
+    if (contract.status === 'IN_PROGRESS') {
+      const contractInfo = activeContracts.get(id);
+      if (contractInfo) {
+        contractInfo.status = 'PAUSED';
+      }
+      activeContracts.delete(id);
+    }
+
+    // Delete contract (recipients will be deleted by cascade)
+    await prisma.contract.delete({
+      where: { id }
+    });
+
+    logger.info(`Deleted contract: ${contract.name} (${id})`);
+
+    res.json({ success: true });
+  } catch (error) {
+    logger.error("Failed to delete contract:", error);
     res.status(500).json({ error: error.message });
   }
 });
