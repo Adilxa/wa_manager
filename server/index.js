@@ -5,6 +5,8 @@ const QRCode = require("qrcode");
 const fs = require("fs");
 const path = require("path");
 const pino = require("pino");
+const { contractQueue, messageQueue } = require("./queue");
+const { initializeWorkers } = require("./workers");
 
 const {
   default: makeWASocket,
@@ -103,9 +105,6 @@ const messageCounters = new Map();
 
 // Message queue for retry logic
 const messageQueues = new Map();
-
-// Contract processing tracker
-const activeContracts = new Map();
 
 // Graceful shutdown flag
 let isShuttingDown = false;
@@ -767,269 +766,6 @@ async function processMessageQueue(accountId) {
         CONFIG.MESSAGE_RETRY_DELAY
       );
     }
-  }
-}
-
-// ==================== CONTRACT PROCESSING ====================
-
-// Process contract - send messages to all recipients
-async function processContract(contractId) {
-  if (isShuttingDown) return;
-
-  const contractInfo = activeContracts.get(contractId);
-  if (!contractInfo) {
-    logger.error(`Contract ${contractId} not found in active contracts`);
-    return;
-  }
-
-  try {
-    // Get contract from database
-    const contract = await prisma.contract.findUnique({
-      where: { id: contractId },
-      include: {
-        recipients: {
-          where: { status: { in: ['PENDING', 'FAILED'] } },
-          orderBy: { createdAt: 'asc' }
-        }
-      }
-    });
-
-    if (!contract) {
-      logger.error(`Contract ${contractId} not found in database`);
-      activeContracts.delete(contractId);
-      return;
-    }
-
-    const accountId = contract.accountId;
-    const clientInfo = clients.get(accountId);
-
-    if (!clientInfo || clientInfo.status !== 'CONNECTED') {
-      logger.warn(`Client ${accountId} not connected, pausing contract ${contractId}`);
-      await prisma.contract.update({
-        where: { id: contractId },
-        data: { status: 'PAUSED' }
-      });
-      contractInfo.status = 'PAUSED';
-      return;
-    }
-
-    // Update contract status to IN_PROGRESS
-    if (contract.status === 'PENDING') {
-      await prisma.contract.update({
-        where: { id: contractId },
-        data: {
-          status: 'IN_PROGRESS',
-          startedAt: new Date()
-        }
-      });
-    }
-
-    logger.info(`📋 Processing contract ${contract.name} (${contractId}): ${contract.recipients.length} recipients pending`);
-
-    // Process each recipient
-    for (const recipient of contract.recipients) {
-      if (isShuttingDown || contractInfo.status === 'PAUSED') {
-        logger.info(`Contract ${contractId} paused or shutting down`);
-        break;
-      }
-
-      try {
-        // Update recipient status to QUEUED
-        await prisma.contractRecipient.update({
-          where: { id: recipient.id },
-          data: {
-            status: 'QUEUED',
-            attempts: recipient.attempts + 1,
-            lastAttempt: new Date()
-          }
-        });
-
-        // Check rate limit
-        const rateCheck = await checkRateLimit(accountId);
-        if (!rateCheck.allowed) {
-          logger.warn(`⏳ Rate limit reached for contract ${contractId}. Waiting ${rateCheck.resetIn}s...`);
-          await sleep(rateCheck.resetIn * 1000);
-        }
-
-        // Check daily limit
-        const dailyCheck = await checkDailyLimit(accountId);
-        if (!dailyCheck.allowed) {
-          logger.error(`🚫 Daily limit reached for contract ${contractId}: ${dailyCheck.reason}`);
-          await prisma.contract.update({
-            where: { id: contractId },
-            data: { status: 'PAUSED' }
-          });
-          contractInfo.status = 'PAUSED';
-          break;
-        }
-
-        // Check if need rest
-        const restCheck = await checkNeedRest(accountId);
-        if (restCheck.needRest && !restCheck.noLimits) {
-          const counter = messageCounters.get(accountId);
-          if (!counter.isResting) {
-            counter.isResting = true;
-            const restDuration = randomDelay(CONFIG.REST_DURATION_MIN, CONFIG.REST_DURATION_MAX);
-            logger.info(`💤 Contract ${contractId} taking a break for ${Math.round(restDuration / 1000)}s after ${counter.count} messages`);
-
-            await sleep(restDuration);
-
-            counter.isResting = false;
-            counter.count = 0;
-            counter.lastRest = Date.now();
-            logger.info(`✨ Contract ${contractId} resuming after rest...`);
-          }
-        }
-
-        // Update recipient status to SENDING
-        await prisma.contractRecipient.update({
-          where: { id: recipient.id },
-          data: { status: 'SENDING' }
-        });
-
-        // Format JID
-        let jid = recipient.phoneNumber;
-        if (!jid.includes('@')) {
-          jid = `${jid}@s.whatsapp.net`;
-        }
-
-        logger.info(`📤 Sending to ${recipient.phoneNumber} (Contract: ${contract.name})`);
-
-        // Send message with human-like behavior
-        const sentMessage = await sendMessageWithHumanBehavior(
-          accountId,
-          jid,
-          recipient.message
-        );
-
-        // Save to database
-        const dbMessage = await prisma.message.create({
-          data: {
-            accountId,
-            chatId: jid,
-            direction: 'OUTGOING',
-            message: recipient.message,
-            to: recipient.phoneNumber,
-            status: 'SENT',
-            contactNumber: recipient.phoneNumber,
-          }
-        });
-
-        // Update recipient status to SUCCESS
-        await prisma.contractRecipient.update({
-          where: { id: recipient.id },
-          data: {
-            status: 'SUCCESS',
-            messageId: dbMessage.id,
-            sentAt: new Date()
-          }
-        });
-
-        // Update contract counters
-        await prisma.contract.update({
-          where: { id: contractId },
-          data: {
-            successCount: { increment: 1 },
-            pendingCount: { decrement: 1 }
-          }
-        });
-
-        // Increment daily counter
-        const limits = dailyLimits.get(accountId);
-        if (limits) {
-          limits.messageCount++;
-        }
-
-        // Increment message counter for rest periods
-        const counter = messageCounters.get(accountId);
-        if (counter) {
-          counter.count++;
-        }
-
-        logger.info(`✅ SUCCESS: ${recipient.phoneNumber} (Contract: ${contract.name})`);
-
-        // Get account to check if limits should be applied
-        const account = await prisma.whatsAppAccount.findUnique({
-          where: { id: accountId }
-        });
-
-        // Add delay between messages if limits are enabled
-        if (account && account.useLimits) {
-          const nextDelay = randomDelay(
-            CONFIG.DELAY_BETWEEN_MESSAGES_MIN,
-            CONFIG.DELAY_BETWEEN_MESSAGES_MAX
-          );
-          logger.debug(`⏱️  Waiting ${Math.round(nextDelay / 1000)}s before next message...`);
-          await sleep(nextDelay);
-        } else {
-          // Small delay even without limits to prevent overwhelming
-          await sleep(100);
-        }
-
-      } catch (error) {
-        logger.error(`❌ FAILED: ${recipient.phoneNumber} - ${error.message}`);
-
-        // Update recipient status to FAILED
-        await prisma.contractRecipient.update({
-          where: { id: recipient.id },
-          data: {
-            status: 'FAILED',
-            errorMessage: error.message
-          }
-        });
-
-        // Update contract counters
-        await prisma.contract.update({
-          where: { id: contractId },
-          data: {
-            failureCount: { increment: 1 },
-            pendingCount: { decrement: 1 }
-          }
-        });
-
-        // Continue with next recipient after short delay
-        await sleep(2000);
-      }
-    }
-
-    // Check if contract is completed
-    const updatedContract = await prisma.contract.findUnique({
-      where: { id: contractId },
-      include: {
-        recipients: {
-          where: { status: { in: ['PENDING', 'QUEUED', 'SENDING'] } }
-        }
-      }
-    });
-
-    if (updatedContract.recipients.length === 0) {
-      // Contract completed
-      await prisma.contract.update({
-        where: { id: contractId },
-        data: {
-          status: 'COMPLETED',
-          completedAt: new Date()
-        }
-      });
-
-      logger.info(`🎉 CONTRACT COMPLETED: ${contract.name}`);
-      logger.info(`   ✅ Success: ${updatedContract.successCount}`);
-      logger.info(`   ❌ Failed: ${updatedContract.failureCount}`);
-
-      activeContracts.delete(contractId);
-    } else {
-      logger.info(`⏸️  Contract ${contractId} paused with ${updatedContract.recipients.length} pending`);
-    }
-
-  } catch (error) {
-    logger.error(`Error processing contract ${contractId}:`, error);
-
-    await prisma.contract.update({
-      where: { id: contractId },
-      data: { status: 'FAILED' }
-    });
-
-    activeContracts.delete(contractId);
   }
 }
 
@@ -1934,30 +1670,22 @@ app.post("/api/contracts/:id/start", async (req, res) => {
       return res.status(400).json({ error: "Account not connected" });
     }
 
-    // Update contract status
-    await prisma.contract.update({
-      where: { id },
-      data: { status: 'IN_PROGRESS' }
+    // Add contract to BullMQ queue
+    const job = await contractQueue.add(`contract-${id}`, {
+      contractId: id
+    }, {
+      jobId: `contract-${id}`, // Prevent duplicates
+      removeOnComplete: false,
+      removeOnFail: false,
     });
 
-    // Add to active contracts
-    activeContracts.set(id, {
-      contractId: id,
-      status: 'IN_PROGRESS',
-      startedAt: Date.now()
-    });
-
-    // Start processing in background
-    processContract(id).catch(err => {
-      logger.error(`Error in contract processing ${id}:`, err);
-    });
-
-    logger.info(`Started contract processing: ${contract.name} (${id})`);
+    logger.info(`📋 Queued contract for processing: ${contract.name} (${id}), Job ID: ${job.id}`);
 
     res.json({
       success: true,
-      message: "Contract processing started",
+      message: "Contract queued for processing",
       contractId: id,
+      jobId: job.id,
       pendingRecipients: contract.recipients.length
     });
   } catch (error) {
@@ -1983,19 +1711,20 @@ app.post("/api/contracts/:id/pause", async (req, res) => {
       return res.status(400).json({ error: "Contract is not in progress" });
     }
 
-    // Update contract status
+    // Update contract status (workers will respect this)
     await prisma.contract.update({
       where: { id },
       data: { status: 'PAUSED' }
     });
 
-    // Update active contract
-    const contractInfo = activeContracts.get(id);
-    if (contractInfo) {
-      contractInfo.status = 'PAUSED';
+    // Remove pending jobs from queue
+    const job = await contractQueue.getJob(`contract-${id}`);
+    if (job) {
+      await job.remove();
+      logger.info(`Removed contract job from queue: ${id}`);
     }
 
-    logger.info(`Paused contract: ${contract.name} (${id})`);
+    logger.info(`⏸️  Paused contract: ${contract.name} (${id})`);
 
     res.json({
       success: true,
@@ -2088,13 +1817,11 @@ app.delete("/api/contracts/:id", async (req, res) => {
       return res.status(404).json({ error: "Contract not found" });
     }
 
-    // Pause if in progress
-    if (contract.status === 'IN_PROGRESS') {
-      const contractInfo = activeContracts.get(id);
-      if (contractInfo) {
-        contractInfo.status = 'PAUSED';
-      }
-      activeContracts.delete(id);
+    // Remove from queue if exists
+    const job = await contractQueue.getJob(`contract-${id}`);
+    if (job) {
+      await job.remove();
+      logger.info(`Removed contract job from queue: ${id}`);
     }
 
     // Delete contract (recipients will be deleted by cascade)
@@ -2102,11 +1829,57 @@ app.delete("/api/contracts/:id", async (req, res) => {
       where: { id }
     });
 
-    logger.info(`Deleted contract: ${contract.name} (${id})`);
+    logger.info(`🗑️  Deleted contract: ${contract.name} (${id})`);
 
     res.json({ success: true });
   } catch (error) {
     logger.error("Failed to delete contract:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get queue status and metrics
+app.get("/api/queues/status", async (req, res) => {
+  try {
+    const contractQueueCounts = await contractQueue.getJobCounts();
+    const messageQueueCounts = await messageQueue.getJobCounts();
+
+    const activeContractJobs = await contractQueue.getActive();
+    const activeMessageJobs = await messageQueue.getActive();
+
+    const stats = {
+      contracts: {
+        waiting: contractQueueCounts.waiting,
+        active: contractQueueCounts.active,
+        completed: contractQueueCounts.completed,
+        failed: contractQueueCounts.failed,
+        delayed: contractQueueCounts.delayed,
+        activeJobs: activeContractJobs.map(j => ({
+          id: j.id,
+          data: j.data,
+          progress: j.progress,
+          attemptsMade: j.attemptsMade,
+        }))
+      },
+      messages: {
+        waiting: messageQueueCounts.waiting,
+        active: messageQueueCounts.active,
+        completed: messageQueueCounts.completed,
+        failed: messageQueueCounts.failed,
+        delayed: messageQueueCounts.delayed,
+        activeJobs: activeMessageJobs.slice(0, 10).map(j => ({
+          id: j.id,
+          phoneNumber: j.data.phoneNumber,
+          contractId: j.data.contractId,
+          progress: j.progress,
+          attemptsMade: j.attemptsMade,
+        }))
+      }
+    };
+
+    res.json(stats);
+  } catch (error) {
+    logger.error("Failed to get queue status:", error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -2291,11 +2064,25 @@ const PORT = process.env.API_PORT || 5001;
 const server = app.listen(PORT, async () => {
   logger.info(`WhatsApp API Server running on http://localhost:${PORT}`);
   logger.info(`Using Baileys - Pure WhatsApp Web API`);
+  logger.info(`Using BullMQ for reliable message queuing`);
   logger.info(
     `Configuration: Max retries=${CONFIG.RECONNECT_MAX_RETRIES}, Heartbeat=${
       CONFIG.HEARTBEAT_INTERVAL / 1000
     }s`
   );
+
+  // Initialize BullMQ workers
+  initializeWorkers({
+    clients,
+    logger,
+    CONFIG,
+    checkRateLimit,
+    checkDailyLimit,
+    checkNeedRest,
+    sendMessageWithHumanBehavior,
+    messageCounters,
+    dailyLimits,
+  });
 
   // Reset intermediate states to DISCONNECTED
   try {
