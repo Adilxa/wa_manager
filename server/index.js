@@ -356,7 +356,11 @@ async function reconnectWithBackoff(accountId) {
       // Reset attempts on successful connection
       reconnectAttempts.delete(accountId);
     } catch (error) {
-      logger.error(`Reconnection failed for ${accountId}:`, error.message);
+      const errorMsg = error.message || error.toString() || 'Unknown error';
+      logger.error(`Reconnection failed for ${accountId}: ${errorMsg}`);
+      if (error.stack) {
+        logger.error(`Stack trace: ${error.stack}`);
+      }
       // Schedule next attempt
       await reconnectWithBackoff(accountId);
     }
@@ -799,12 +803,18 @@ async function initializeClient(accountId) {
 
   logger.info(`Initializing Baileys client for ${accountId}`);
 
-  const account = await prisma.whatsAppAccount.findUnique({
-    where: { id: accountId },
-  });
+  let account;
+  try {
+    account = await prisma.whatsAppAccount.findUnique({
+      where: { id: accountId },
+    });
 
-  if (!account) {
-    throw new Error("Account not found");
+    if (!account) {
+      throw new Error("Account not found");
+    }
+  } catch (dbError) {
+    logger.error(`Database error while loading account ${accountId}:`, dbError.message || dbError);
+    throw dbError;
   }
 
   // Check if client already exists and connected
@@ -1070,9 +1080,10 @@ async function initializeClient(accountId) {
     });
   } catch (error) {
     connectingAccounts.delete(accountId);
-    logger.error(`Failed to initialize client for ${accountId}:`, error.message || error);
+    const errorMsg = error.message || error.toString() || 'Unknown error';
+    logger.error(`Failed to initialize client for ${accountId}: ${errorMsg}`);
     if (error.stack) {
-      logger.debug("Error stack:", error.stack);
+      logger.error(`Stack trace: ${error.stack}`);
     }
     await updateAccountStatus(accountId, "FAILED");
     await cleanupClient(accountId);
@@ -1203,11 +1214,15 @@ app.post("/api/accounts/:id/connect", async (req, res) => {
     await initializeClient(accountId);
     res.json({ success: true, message: "Client initialization started" });
   } catch (error) {
-    logger.error(`Failed to connect account ${accountId}:`, error.message || error);
-    logger.error("Error details:", error.stack || error);
+    const errorMsg = error.message || error.toString() || 'Unknown error';
+    const errorStack = error.stack || '';
+    logger.error(`Failed to connect account ${accountId}: ${errorMsg}`);
+    if (errorStack) {
+      logger.error(`Stack trace: ${errorStack}`);
+    }
     res.status(500).json({
-      error: error.message || 'Failed to connect account',
-      details: process.env.NODE_ENV === "development" ? error.stack : undefined
+      error: errorMsg,
+      details: process.env.NODE_ENV === "development" ? errorStack : undefined
     });
   }
 });
@@ -1224,6 +1239,7 @@ app.post("/api/accounts/:id/disconnect", async (req, res) => {
 
     // Stop reconnection attempts
     reconnectAttempts.delete(accountId);
+    connectingAccounts.delete(accountId);
 
     // Close the socket
     try {
@@ -1240,6 +1256,53 @@ app.post("/api/accounts/:id/disconnect", async (req, res) => {
   } catch (error) {
     logger.error("Failed to disconnect:", error);
     res.status(500).json({ error: error.message });
+  }
+});
+
+// Reset account session - clears session and stops reconnection attempts
+app.post("/api/accounts/:id/reset-session", async (req, res) => {
+  try {
+    const accountId = req.params.id;
+
+    logger.info(`🔄 Resetting session for account: ${accountId}`);
+
+    // Stop all connection attempts
+    reconnectAttempts.delete(accountId);
+    connectingAccounts.delete(accountId);
+
+    // Cleanup client if exists
+    const clientInfo = clients.get(accountId);
+    if (clientInfo) {
+      try {
+        await clientInfo.sock.end();
+      } catch (e) {
+        // Ignore errors
+      }
+      await cleanupClient(accountId);
+    }
+
+    // Clear session directory
+    const sessionPath = getSessionPath(accountId);
+    if (fs.existsSync(sessionPath)) {
+      try {
+        fs.rmSync(sessionPath, { recursive: true, force: true });
+        logger.info(`Cleared session directory: ${sessionPath}`);
+      } catch (fsError) {
+        logger.error(`Failed to clear session directory: ${fsError.message}`);
+      }
+    }
+
+    // Update status to DISCONNECTED
+    await updateAccountStatus(accountId, "DISCONNECTED");
+
+    logger.info(`✅ Session reset complete for: ${accountId}`);
+    res.json({
+      success: true,
+      message: "Session reset successfully. You can now reconnect with a new QR code."
+    });
+  } catch (error) {
+    logger.error(`Failed to reset session for ${accountId}:`, error);
+    res.status(500).json({ error: error.message || "Failed to reset session" });
   }
 });
 
