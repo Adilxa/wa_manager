@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useParams } from 'next/navigation';
 import { CheckCircle2, Loader2, AlertCircle, RefreshCw } from 'lucide-react';
 
@@ -25,13 +25,33 @@ export default function QRPage() {
   const [error, setError] = useState<string | null>(null);
   const [autoConnectAttempted, setAutoConnectAttempted] = useState(false);
 
+  // Refs для контроля polling
+  const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const isLoadingRef = useRef(false);
+  const accountStatusRef = useRef<string>('');
+
   const loadAccount = async () => {
+    // Предотвращаем множественные одновременные запросы
+    if (isLoadingRef.current) return;
+
+    isLoadingRef.current = true;
+
     try {
-      const response = await fetch(`${API_URL}/api/accounts/${accountId}`);
+      const response = await fetch(`${API_URL}/api/accounts/${accountId}`, {
+        cache: 'no-store',
+        headers: {
+          'Cache-Control': 'no-cache',
+        },
+      });
+
       if (!response.ok) {
         throw new Error('Account not found');
       }
+
       const data = await response.json();
+
+      // Обновляем ref и state
+      accountStatusRef.current = data.clientStatus;
       setAccount(data);
       setError(null);
     } catch (err) {
@@ -39,57 +59,101 @@ export default function QRPage() {
       console.error('Failed to load account:', err);
     } finally {
       setLoading(false);
+      isLoadingRef.current = false;
     }
   };
 
   const connectAccount = async () => {
     try {
-      await fetch(`${API_URL}/api/accounts/${accountId}/connect`, { method: 'POST' });
+      const response = await fetch(`${API_URL}/api/accounts/${accountId}/connect`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to connect');
+      }
+
       await loadAccount();
     } catch (err) {
       console.error('Failed to connect:', err);
+      alert('❌ Failed to connect account. Please try again.');
     }
   };
 
   const regenerateQR = async () => {
     if (!account) return;
+
     setRegenerating(true);
+
     try {
       // Disconnect
-      await fetch(`${API_URL}/api/accounts/${accountId}/disconnect`, { method: 'POST' });
+      const disconnectRes = await fetch(`${API_URL}/api/accounts/${accountId}/disconnect`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+
+      if (!disconnectRes.ok) {
+        throw new Error('Failed to disconnect');
+      }
+
       await new Promise(resolve => setTimeout(resolve, 1000));
+
       // Reconnect
-      await fetch(`${API_URL}/api/accounts/${accountId}/connect`, { method: 'POST' });
+      const connectRes = await fetch(`${API_URL}/api/accounts/${accountId}/connect`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+
+      if (!connectRes.ok) {
+        throw new Error('Failed to reconnect');
+      }
+
       await loadAccount();
+      alert('✅ QR Code regenerated successfully!');
     } catch (err) {
       console.error('Failed to regenerate QR:', err);
+      alert('❌ Failed to regenerate QR code. Please try again.');
     } finally {
       setRegenerating(false);
     }
   };
 
-  // Начальная загрузка и авто-коннект
+  // Начальная загрузка
   useEffect(() => {
     loadAccount();
   }, []);
 
-  // Auto-refresh только если не подключен
+  // Умный polling на основе статуса
   useEffect(() => {
-    // Если уже подключен, не нужен частый polling
-    if (account?.clientStatus === 'CONNECTED') {
-      // Редкий polling для подключенных аккаунтов (раз в 10 секунд)
-      const interval = setInterval(() => {
-        loadAccount();
-      }, 10000);
-      return () => clearInterval(interval);
+    // Очищаем предыдущий интервал
+    if (pollingIntervalRef.current) {
+      clearInterval(pollingIntervalRef.current);
+      pollingIntervalRef.current = null;
     }
 
-    // Для не подключенных - каждые 3 секунды
+    // Определяем интервал в зависимости от статуса
+    const getPollingInterval = () => {
+      const status = accountStatusRef.current;
+
+      if (status === 'CONNECTED') {
+        return 10000; // 10 секунд для подключенных
+      } else if (['QR_READY', 'CONNECTING', 'AUTHENTICATING'].includes(status)) {
+        return 2000; // 2 секунды для активного процесса подключения
+      } else {
+        return 5000; // 5 секунд по умолчанию
+      }
+    };
+
     const interval = setInterval(() => {
       loadAccount();
-    }, 3000);
+    }, getPollingInterval());
 
-    return () => clearInterval(interval);
+    pollingIntervalRef.current = interval;
+
+    return () => {
+      if (interval) clearInterval(interval);
+    };
   }, [account?.clientStatus]);
 
   // Auto-connect if disconnected on first load

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Send,
@@ -59,6 +59,12 @@ export default function ChatPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
+  // Refs для предотвращения множественных запросов
+  const chatsIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const messagesIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const isLoadingChatsRef = useRef(false);
+  const isLoadingMessagesRef = useRef(false);
+
   // Проверка авторизации
   useEffect(() => {
     const isAuth = localStorage.getItem('wa_manager_auth');
@@ -74,36 +80,58 @@ export default function ChatPage() {
 
   // Загрузка чатов при выборе аккаунта
   useEffect(() => {
+    // Очищаем предыдущий интервал
+    if (chatsIntervalRef.current) {
+      clearInterval(chatsIntervalRef.current);
+      chatsIntervalRef.current = null;
+    }
+
     if (!selectedAccount) return;
 
-    // Загружаем чаты при первой загрузке
-    loadChats(selectedAccount.id);
+    const accountId = selectedAccount.id;
+
+    // Загружаем чаты сразу
+    loadChats(accountId);
 
     // Создаем интервал для обновления
-    const accountId = selectedAccount.id;
     const interval = setInterval(() => {
       loadChats(accountId);
     }, 5000);
 
-    return () => clearInterval(interval);
-  }, [selectedAccount?.id]); // Зависим только от ID, не от всего объекта
+    chatsIntervalRef.current = interval;
+
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [selectedAccount?.id]);
 
   // Загрузка сообщений при выборе чата
   useEffect(() => {
+    // Очищаем предыдущий интервал
+    if (messagesIntervalRef.current) {
+      clearInterval(messagesIntervalRef.current);
+      messagesIntervalRef.current = null;
+    }
+
     if (!selectedChat || !selectedAccount) return;
 
-    // Загружаем сообщения при первой загрузке
-    loadMessages(selectedAccount.id, selectedChat.chatId);
-
-    // Создаем интервал для обновления
     const accountId = selectedAccount.id;
     const chatId = selectedChat.chatId;
+
+    // Загружаем сообщения сразу
+    loadMessages(accountId, chatId);
+
+    // Создаем интервал для обновления
     const interval = setInterval(() => {
       loadMessages(accountId, chatId);
     }, 3000);
 
-    return () => clearInterval(interval);
-  }, [selectedChat?.chatId, selectedAccount?.id]); // Зависим только от ID
+    messagesIntervalRef.current = interval;
+
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [selectedChat?.chatId, selectedAccount?.id]);
 
   // Автоскролл к последнему сообщению
   useEffect(() => {
@@ -135,33 +163,75 @@ export default function ChatPage() {
   };
 
   const loadChats = async (accountId: string) => {
+    // Предотвращаем множественные одновременные запросы
+    if (isLoadingChatsRef.current) return;
+
+    isLoadingChatsRef.current = true;
+
     try {
-      const response = await fetch(`${API_URL}/api/accounts/${accountId}/chats`);
+      const response = await fetch(`${API_URL}/api/accounts/${accountId}/chats`, {
+        cache: 'no-store',
+        headers: {
+          'Cache-Control': 'no-cache',
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
       const data = await response.json();
       setChats(data);
     } catch (error) {
       console.error('Failed to load chats:', error);
+    } finally {
+      isLoadingChatsRef.current = false;
     }
   };
 
   const loadMessages = async (accountId: string, chatId: string) => {
+    // Предотвращаем множественные одновременные запросы
+    if (isLoadingMessagesRef.current) return;
+
+    isLoadingMessagesRef.current = true;
+
     try {
       const encodedChatId = encodeURIComponent(chatId);
       const response = await fetch(
-        `${API_URL}/api/accounts/${accountId}/chats/${encodedChatId}`
+        `${API_URL}/api/accounts/${accountId}/chats/${encodedChatId}`,
+        {
+          cache: 'no-store',
+          headers: {
+            'Cache-Control': 'no-cache',
+          },
+        }
       );
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
       const data = await response.json();
       setMessages(data);
     } catch (error) {
       console.error('Failed to load messages:', error);
+    } finally {
+      isLoadingMessagesRef.current = false;
     }
   };
 
   const sendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newMessage.trim() || !selectedChat || !selectedAccount) return;
+
+    if (!newMessage.trim() || !selectedChat || !selectedAccount) {
+      if (!newMessage.trim()) {
+        alert('⚠️ Please enter a message');
+      }
+      return;
+    }
 
     setSending(true);
+
     try {
       const encodedChatId = encodeURIComponent(selectedChat.chatId);
       const response = await fetch(
@@ -169,19 +239,26 @@ export default function ChatPage() {
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message: newMessage }),
+          body: JSON.stringify({ message: newMessage.trim() }),
         }
       );
 
-      if (response.ok) {
-        setNewMessage('');
-        // Перезагружаем сообщения
-        await loadMessages(selectedAccount.id, selectedChat.chatId);
-        // Обновляем список чатов
-        await loadChats(selectedAccount.id);
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ error: 'Failed to send message' }));
+        throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
       }
-    } catch (error) {
+
+      // Очищаем поле ввода
+      setNewMessage('');
+
+      // Перезагружаем сообщения и чаты
+      await Promise.all([
+        loadMessages(selectedAccount.id, selectedChat.chatId),
+        loadChats(selectedAccount.id),
+      ]);
+    } catch (error: any) {
       console.error('Failed to send message:', error);
+      alert(`❌ ${error.message || 'Failed to send message. Please try again.'}`);
     } finally {
       setSending(false);
     }
