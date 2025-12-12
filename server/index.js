@@ -19,7 +19,17 @@ const {
 const prisma = new PrismaClient();
 const app = express();
 
-app.use(cors());
+// CORS configuration - explicitly allow all methods including DELETE
+app.use(cors({
+  origin: '*',
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
+  credentials: true,
+}));
+
+// Handle preflight requests
+app.options('*', cors());
+
 app.use(express.json());
 
 // Logger configuration
@@ -102,6 +112,9 @@ const dailyLimits = new Map();
 
 // Message counters for rest periods
 const messageCounters = new Map();
+
+// Message queues for each account (legacy in-memory queue)
+const messageQueues = new Map();
 
 // Graceful shutdown flag
 let isShuttingDown = false;
@@ -1208,41 +1221,78 @@ app.post("/api/accounts/:id/disconnect", async (req, res) => {
 
 // Delete account
 app.delete("/api/accounts/:id", async (req, res) => {
+  const accountId = req.params.id;
+  logger.info(`🗑️ DELETE request received for account: ${accountId}`);
+
   try {
-    const accountId = req.params.id;
+    // Check if account exists
+    const account = await prisma.whatsAppAccount.findUnique({
+      where: { id: accountId },
+    });
+
+    if (!account) {
+      logger.warn(`Account not found: ${accountId}`);
+      return res.status(404).json({ error: "Account not found" });
+    }
+
+    logger.info(`Account found: ${account.name} (${accountId})`);
 
     // Stop reconnection attempts
     reconnectAttempts.delete(accountId);
+    logger.debug(`Stopped reconnection attempts for ${accountId}`);
 
+    // Cleanup client if exists
     const clientInfo = clients.get(accountId);
     if (clientInfo) {
+      logger.info(`Cleaning up active client for ${accountId}`);
       try {
         await clientInfo.sock.logout();
+        logger.debug(`Logged out client ${accountId}`);
       } catch (e) {
-        logger.error("Error during logout:", e);
+        logger.error(`Error during logout for ${accountId}:`, e);
       }
       await cleanupClient(accountId);
+      logger.info(`Client cleanup completed for ${accountId}`);
+    } else {
+      logger.debug(`No active client found for ${accountId}`);
     }
 
     // Delete session files
     const sessionPath = getSessionPath(accountId);
     if (fs.existsSync(sessionPath)) {
+      logger.info(`Deleting session files for ${accountId}`);
       fs.rmSync(sessionPath, { recursive: true, force: true });
+      logger.debug(`Session files deleted for ${accountId}`);
+    } else {
+      logger.debug(`No session files found for ${accountId}`);
     }
 
     // Clear message queue
     messageQueues.delete(accountId);
     rateLimiter.delete(accountId);
+    dailyLimits.delete(accountId);
+    messageCounters.delete(accountId);
+    logger.debug(`Cleared all queues and limits for ${accountId}`);
 
+    // Delete from database
+    logger.info(`Deleting account from database: ${accountId}`);
     await prisma.whatsAppAccount.delete({
       where: { id: accountId },
     });
 
-    logger.info(`Deleted account: ${accountId}`);
-    res.json({ success: true });
+    logger.info(`✅ Successfully deleted account: ${account.name} (${accountId})`);
+    res.status(200).json({
+      success: true,
+      message: 'Account deleted successfully',
+      accountId: accountId,
+    });
   } catch (error) {
-    logger.error("Failed to delete account:", error);
-    res.status(500).json({ error: error.message });
+    logger.error(`❌ Failed to delete account ${accountId}:`, error);
+    logger.error('Error stack:', error.stack);
+    res.status(500).json({
+      error: error.message || 'Failed to delete account',
+      details: process.env.NODE_ENV === 'development' ? error.stack : undefined,
+    });
   }
 });
 

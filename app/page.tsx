@@ -300,18 +300,41 @@ export default function Dashboard() {
   const deleteAccount = async (accountId: string) => {
     if (!confirm('Are you sure you want to delete this account? This action cannot be undone.')) return;
 
+    console.log('🗑️ Starting delete for account:', accountId);
+
     try {
-      const response = await fetch(`${API_URL}/api/accounts/${accountId}`, {
+      const deleteUrl = `${API_URL}/api/accounts/${accountId}`;
+      console.log('DELETE URL:', deleteUrl);
+
+      const response = await fetch(deleteUrl, {
         method: 'DELETE',
         headers: {
           'Content-Type': 'application/json',
+          'Accept': 'application/json',
         },
       });
 
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ error: 'Failed to delete account' }));
-        throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
+      console.log('DELETE Response status:', response.status);
+      console.log('DELETE Response ok:', response.ok);
+
+      // Попытка прочитать тело ответа
+      let responseData;
+      try {
+        const text = await response.text();
+        console.log('DELETE Response text:', text);
+        responseData = text ? JSON.parse(text) : {};
+      } catch (parseError) {
+        console.error('Failed to parse response:', parseError);
+        responseData = {};
       }
+
+      if (!response.ok) {
+        const errorMessage = responseData.error || `HTTP error! status: ${response.status}`;
+        console.error('DELETE failed:', errorMessage);
+        throw new Error(errorMessage);
+      }
+
+      console.log('✅ DELETE successful, response:', responseData);
 
       // Успешно удалено - обновляем список
       await loadAccounts(true);
@@ -322,9 +345,13 @@ export default function Dashboard() {
       }
 
       alert('✅ Account deleted successfully!');
-    } catch (error) {
-      console.error('Failed to delete account:', error);
-      alert('❌ Failed to delete account. Please try again.');
+    } catch (error: any) {
+      console.error('❌ Failed to delete account:', error);
+      console.error('Error details:', {
+        message: error.message,
+        stack: error.stack,
+      });
+      alert(`❌ Failed to delete account: ${error.message || 'Unknown error'}`);
     }
   };
 
