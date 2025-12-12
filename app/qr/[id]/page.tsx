@@ -68,16 +68,29 @@ export default function QRPage() {
     }
   };
 
+  // Начальная загрузка и авто-коннект
   useEffect(() => {
     loadAccount();
+  }, []);
 
-    // Auto-refresh every 3 seconds
+  // Auto-refresh только если не подключен
+  useEffect(() => {
+    // Если уже подключен, не нужен частый polling
+    if (account?.clientStatus === 'CONNECTED') {
+      // Редкий polling для подключенных аккаунтов (раз в 10 секунд)
+      const interval = setInterval(() => {
+        loadAccount();
+      }, 10000);
+      return () => clearInterval(interval);
+    }
+
+    // Для не подключенных - каждые 3 секунды
     const interval = setInterval(() => {
       loadAccount();
     }, 3000);
 
     return () => clearInterval(interval);
-  }, [accountId]);
+  }, [account?.clientStatus]);
 
   // Auto-connect if disconnected on first load
   useEffect(() => {
@@ -88,7 +101,7 @@ export default function QRPage() {
         connectAccount();
       }
     }
-  }, [loading, account, autoConnectAttempted]);
+  }, [loading, account?.clientStatus, autoConnectAttempted]);
 
   const isConnected = account?.clientStatus === 'CONNECTED';
   const hasQR = account?.qrCode && ['QR_READY', 'CONNECTING', 'AUTHENTICATING'].includes(account?.clientStatus || '');

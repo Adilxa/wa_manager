@@ -69,24 +69,34 @@ export default function Dashboard() {
     }
   };
 
+  // Начальная загрузка аккаунтов
   useEffect(() => {
     loadAccounts();
+  }, []);
 
-    // Умный polling: обновляем только когда есть аккаунты в процессе подключения
+  // Умный polling: обновляем только когда есть аккаунты в процессе подключения
+  useEffect(() => {
     const interval = setInterval(() => {
-      const hasConnectingAccounts = accounts.some(
-        acc => ['CONNECTING', 'AUTHENTICATING', 'QR_READY'].includes(acc.clientStatus)
-      );
+      // Проверяем актуальное состояние через setState callback
+      setAccounts((currentAccounts) => {
+        const hasConnectingAccounts = currentAccounts.some(
+          acc => ['CONNECTING', 'AUTHENTICATING', 'QR_READY'].includes(acc.clientStatus)
+        );
 
-      // Обновляем только если есть активные процессы подключения
-      if (hasConnectingAccounts || accounts.length === 0) {
-        loadAccounts();
-      }
-    }, 5000); // Увеличено до 5 секунд
+        // Обновляем только если есть активные процессы подключения
+        if (hasConnectingAccounts || currentAccounts.length === 0) {
+          loadAccounts();
+        }
+
+        return currentAccounts; // Возвращаем без изменений
+      });
+    }, 5000); // 5 секунд
 
     setRefreshInterval(interval);
-    return () => interval && clearInterval(interval);
-  }, [accounts]);
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, []); // Пустой массив зависимостей - интервал создается только один раз
 
   // Создание аккаунта
   const createAccount = async () => {

@@ -12,7 +12,8 @@
       "Bash(curl:*)",
       "Bash(node --version)",
       "Bash(dir /s /b \"C:\\Users\\boss-\\OneDrive\\Рабочий стол\\Active Projects\\OCTO\\wa\\wa_manager\")",
-      "Bash(findstr:*)"
+      "Bash(findstr:*)",
+      "Bash(dir:*)"
     ],
     "deny": [],
     "ask": []

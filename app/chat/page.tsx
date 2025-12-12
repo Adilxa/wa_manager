@@ -74,25 +74,36 @@ export default function ChatPage() {
 
   // Загрузка чатов при выборе аккаунта
   useEffect(() => {
-    if (selectedAccount) {
-      loadChats(selectedAccount.id);
-      const interval = setInterval(() => {
-        loadChats(selectedAccount.id);
-      }, 5000);
-      return () => clearInterval(interval);
-    }
-  }, [selectedAccount]);
+    if (!selectedAccount) return;
+
+    // Загружаем чаты при первой загрузке
+    loadChats(selectedAccount.id);
+
+    // Создаем интервал для обновления
+    const accountId = selectedAccount.id;
+    const interval = setInterval(() => {
+      loadChats(accountId);
+    }, 5000);
+
+    return () => clearInterval(interval);
+  }, [selectedAccount?.id]); // Зависим только от ID, не от всего объекта
 
   // Загрузка сообщений при выборе чата
   useEffect(() => {
-    if (selectedChat && selectedAccount) {
-      loadMessages(selectedAccount.id, selectedChat.chatId);
-      const interval = setInterval(() => {
-        loadMessages(selectedAccount.id, selectedChat.chatId);
-      }, 3000);
-      return () => clearInterval(interval);
-    }
-  }, [selectedChat, selectedAccount]);
+    if (!selectedChat || !selectedAccount) return;
+
+    // Загружаем сообщения при первой загрузке
+    loadMessages(selectedAccount.id, selectedChat.chatId);
+
+    // Создаем интервал для обновления
+    const accountId = selectedAccount.id;
+    const chatId = selectedChat.chatId;
+    const interval = setInterval(() => {
+      loadMessages(accountId, chatId);
+    }, 3000);
+
+    return () => clearInterval(interval);
+  }, [selectedChat?.chatId, selectedAccount?.id]); // Зависим только от ID
 
   // Автоскролл к последнему сообщению
   useEffect(() => {
