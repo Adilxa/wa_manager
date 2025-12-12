@@ -245,7 +245,14 @@ export default function ChatPage() {
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({ error: 'Failed to send message' }));
-        throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
+
+        // If account is connecting, show a helpful message
+        if (response.status === 503 && errorData.error?.includes('connecting')) {
+          alert('🔄 Account is connecting... Please wait a few seconds and try again.');
+        } else {
+          throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
+        }
+        return;
       }
 
       // Очищаем поле ввода
