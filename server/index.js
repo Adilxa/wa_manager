@@ -1070,7 +1070,10 @@ async function initializeClient(accountId) {
     });
   } catch (error) {
     connectingAccounts.delete(accountId);
-    logger.error(`Failed to initialize client for ${accountId}:`, error);
+    logger.error(`Failed to initialize client for ${accountId}:`, error.message || error);
+    if (error.stack) {
+      logger.debug("Error stack:", error.stack);
+    }
     await updateAccountStatus(accountId, "FAILED");
     await cleanupClient(accountId);
     throw error;
@@ -1187,11 +1190,25 @@ app.post("/api/accounts/:id/connect", async (req, res) => {
       return res.status(400).json({ error: "Client already connected" });
     }
 
+    // If stuck in AUTHENTICATING for too long, force cleanup
+    if (existing && (existing.status === "AUTHENTICATING" || existing.status === "CONNECTING")) {
+      const stuckTime = Date.now() - (existing.lastActivity || 0);
+      if (stuckTime > 120000) { // 2 minutes
+        logger.warn(`Account ${accountId} stuck in ${existing.status} for ${Math.round(stuckTime/1000)}s, forcing cleanup`);
+        await cleanupClient(accountId);
+        connectingAccounts.delete(accountId);
+      }
+    }
+
     await initializeClient(accountId);
     res.json({ success: true, message: "Client initialization started" });
   } catch (error) {
-    logger.error("Failed to connect:", error);
-    res.status(500).json({ error: error.message });
+    logger.error(`Failed to connect account ${accountId}:`, error.message || error);
+    logger.error("Error details:", error.stack || error);
+    res.status(500).json({
+      error: error.message || 'Failed to connect account',
+      details: process.env.NODE_ENV === "development" ? error.stack : undefined
+    });
   }
 });
 
@@ -2165,7 +2182,10 @@ async function restoreConnectedClients() {
         logger.info(`Restoring: ${account.name} (${account.id})`);
         await initializeClient(account.id);
       } catch (error) {
-        logger.error(`Failed to restore ${account.name}:`, error.message);
+        logger.error(`Failed to restore ${account.name} (${account.id}):`, error.message || error);
+        if (error.stack) {
+          logger.debug("Error stack:", error.stack);
+        }
       }
     }
 

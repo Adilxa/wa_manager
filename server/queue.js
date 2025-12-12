@@ -2,13 +2,19 @@ const { Queue, Worker, QueueEvents } = require("bullmq");
 const Redis = require("ioredis");
 
 // Redis connection configuration
-const redisConnection = new Redis({
+const redisConfig = {
   host: process.env.REDIS_HOST || "localhost",
   port: process.env.REDIS_PORT || 6379,
-  password: process.env.REDIS_PASSWORD || undefined,
   maxRetriesPerRequest: null,
   enableReadyCheck: false,
-});
+};
+
+// Only add password if it's set
+if (process.env.REDIS_PASSWORD) {
+  redisConfig.password = process.env.REDIS_PASSWORD;
+}
+
+const redisConnection = new Redis(redisConfig);
 
 // Create queue for contract processing
 const contractQueue = new Queue("contracts", {
@@ -48,13 +54,13 @@ const messageQueue = new Queue("messages", {
   },
 });
 
-// Queue events for monitoring
+// Queue events for monitoring - create new connections without password warnings
 const contractQueueEvents = new QueueEvents("contracts", {
-  connection: redisConnection,
+  connection: redisConfig,
 });
 
 const messageQueueEvents = new QueueEvents("messages", {
-  connection: redisConnection,
+  connection: redisConfig,
 });
 
 module.exports = {
