@@ -3,13 +3,20 @@ services:
     image: postgres:16-alpine
     container_name: wa-postgres
     restart: unless-stopped
+
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: wa_manager
       PGDATA: /var/lib/postgresql/data/pgdata
+
     volumes:
       - postgres_data:/var/lib/postgresql/data
+
+    # Порт не пробрасываем наружу - только для внутренней Docker сети
+    # ports:
+    #   - "5432:5432"
+
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 10s
@@ -20,9 +27,17 @@ services:
     image: redis:7-alpine
     container_name: wa-redis
     restart: unless-stopped
+
     volumes:
       - redis_data:/data
+
+    # Порт не пробрасываем наружу - только для внутренней Docker сети
+    # ports:
+    #   - "6379:6379"
+
+    # Redis persistence configuration
     command: redis-server --appendonly yes --appendfsync everysec
+
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -35,50 +50,61 @@ services:
       dockerfile: Dockerfile
     container_name: wa-manager
     restart: unless-stopped
+
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+
     ports:
-      - "3000:3000"
-      - "5001:5001"
+      - "3000:3000"    # Next.js UI
+      - "5001:5001"    # WhatsApp API
+
     environment:
+      # Database
       DATABASE_URL: ${DATABASE_URL}
       DIRECT_URL: ${DIRECT_URL}
+
+      # Redis (для BullMQ)
       REDIS_HOST: redis
       REDIS_PORT: 6379
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+
+      # Next.js
       NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-http://localhost:3000}
       NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:5001}
+
+      # API Port
       API_PORT: 5001
+
+      # Security
       API_SECRET_KEY: ${API_SECRET_KEY}
+
+      # Node
       NODE_ENV: production
+
     volumes:
+      # Персистентное хранилище для Baileys auth сессий
       - baileys_auth:/app/.baileys_auth
       - wa_logs:/app/logs
-    # ИСПРАВЛЕНО: убрали wget, используем curl
+
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000"]
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 40s
+
+    # Ограничения ресурсов (опционально)
     deploy:
       resources:
         limits:
-          cpus: '1.0'          # Уменьшили с 2.0 до 1.0
-          memory: 512M         # Уменьшили с 2G до 512M
+          cpus: '2.0'
+          memory: 2G
         reservations:
-          cpus: '0.5'
-          memory: 256M
-    # Дополнительная безопасность
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
-    cap_add:
-      - NET_BIND_SERVICE
+          cpus: '1.0'
+          memory: 1G
 
 volumes:
   postgres_data:
