@@ -5,6 +5,8 @@ const QRCode = require("qrcode");
 const fs = require("fs");
 const path = require("path");
 const pino = require("pino");
+const { contractQueue, messageQueue } = require("./queue");
+const { initializeWorkers } = require("./workers");
 
 const {
   default: makeWASocket,
@@ -17,7 +19,16 @@ const {
 const prisma = new PrismaClient();
 const app = express();
 
-app.use(cors());
+// CORS configuration - explicitly allow all methods including DELETE
+app.use(
+  cors({
+    origin: "*",
+    methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization", "Accept"],
+    credentials: true,
+  })
+);
+
 app.use(express.json());
 
 // Logger configuration
@@ -33,17 +44,93 @@ const logger = pino({
   },
 });
 
+// ==================== CONFIGURATION ====================
+
+const CONFIG = {
+  // Reconnection settings
+  RECONNECT_MAX_RETRIES: 10,
+  RECONNECT_BASE_DELAY: 1000, // 1 second
+  RECONNECT_MAX_DELAY: 300000, // 5 minutes max
+
+  // Heartbeat settings
+  HEARTBEAT_INTERVAL: 30000, // Check every 30 seconds
+  HEARTBEAT_TIMEOUT: 10000, // 10 second timeout for ping
+
+  // Initialization timeout
+  INIT_TIMEOUT: 120000, // 2 minutes to initialize
+
+  // Rate limiting - БЕЗОПАСНЫЕ значения для избежания бана
+  RATE_LIMIT_WINDOW: 60000, // 1 minute window
+  RATE_LIMIT_MAX_MESSAGES: 20, // Max 20 messages per minute (было 100)
+
+  // Дневные лимиты для нового аккаунта
+  DAILY_MESSAGE_LIMIT_NEW_ACCOUNT: 500, // Для аккаунтов младше 7 дней
+  DAILY_MESSAGE_LIMIT_OLD_ACCOUNT: 1000, // Для старых аккаунтов
+  DAILY_NEW_CHATS_LIMIT: 100, // Максимум новых чатов в день
+
+  // Memory management
+  MEMORY_CHECK_INTERVAL: 60000, // Check every minute
+  MEMORY_WARNING_THRESHOLD: 0.75, // Warn at 75%
+  MEMORY_CRITICAL_THRESHOLD: 0.85, // Critical at 85%
+
+  // Message queue
+  MESSAGE_RETRY_COUNT: 3,
+  MESSAGE_RETRY_DELAY: 5000, // 5 seconds between retries
+
+  // Resource monitoring
+  RESOURCE_MONITOR_INTERVAL: 300000, // 5 minutes
+
+  // Human-like behavior delays (в миллисекундах)
+  TYPING_SPEED_MIN: 30, // Минимальная скорость печати (мс на символ)
+  TYPING_SPEED_MAX: 100, // Максимальная скорость печати (мс на символ)
+  DELAY_BEFORE_TYPING_MIN: 500, // Задержка перед началом печати
+  DELAY_BEFORE_TYPING_MAX: 2000,
+  DELAY_BETWEEN_MESSAGES_MIN: 3000, // Задержка между сообщениями
+  DELAY_BETWEEN_MESSAGES_MAX: 8000,
+  REST_AFTER_MESSAGES: 5, // Отдых после N сообщений
+  REST_DURATION_MIN: 30000, // Минимальное время отдыха (30 сек)
+  REST_DURATION_MAX: 120000, // Максимальное время отдыха (2 мин)
+};
+
+// ==================== STATE MANAGEMENT ====================
+
 // Store active WhatsApp sockets
 const clients = new Map();
 
+// Track reconnection attempts
+const reconnectAttempts = new Map();
+
+// Track accounts being connected (prevent race conditions)
+const connectingAccounts = new Set();
+
+// Rate limiting tracker
+const rateLimiter = new Map();
+
+// Daily limits tracker
+const dailyLimits = new Map();
+
+// Message counters for rest periods
+const messageCounters = new Map();
+
+// Message queues for each account (legacy in-memory queue)
+const messageQueues = new Map();
+
 // Graceful shutdown flag
 let isShuttingDown = false;
+
+// Heartbeat interval reference
+let heartbeatInterval = null;
+
+// Memory monitor interval reference
+let memoryMonitorInterval = null;
 
 // Auth sessions directory
 const SESSIONS_DIR = path.join(process.cwd(), ".baileys_auth");
 if (!fs.existsSync(SESSIONS_DIR)) {
   fs.mkdirSync(SESSIONS_DIR, { recursive: true });
 }
+
+// ==================== HELPER FUNCTIONS ====================
 
 // Helper function to get session path
 function getSessionPath(accountId) {
@@ -63,29 +150,688 @@ async function updateAccountStatus(accountId, status, data = {}) {
   }
 }
 
+// Calculate exponential backoff delay
+function getBackoffDelay(attempt) {
+  const delay = Math.min(
+    CONFIG.RECONNECT_BASE_DELAY * Math.pow(2, attempt),
+    CONFIG.RECONNECT_MAX_DELAY
+  );
+  // Add jitter to prevent thundering herd
+  return delay + Math.random() * 1000;
+}
+
+// Generate random delay in range
+function randomDelay(min, max) {
+  return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+// Calculate typing delay based on message length
+function calculateTypingDelay(message) {
+  const length = message.length;
+  const speed = randomDelay(CONFIG.TYPING_SPEED_MIN, CONFIG.TYPING_SPEED_MAX);
+  return length * speed;
+}
+
+// Sleep function
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// Check rate limit for account
+async function checkRateLimit(accountId) {
+  // Get account to check if limits should be applied
+  const account = await prisma.whatsAppAccount.findUnique({
+    where: { id: accountId },
+  });
+
+  // If useLimits is false, always allow
+  if (!account || !account.useLimits) {
+    return { allowed: true, noLimits: true };
+  }
+
+  const now = Date.now();
+
+  if (!rateLimiter.has(accountId)) {
+    rateLimiter.set(accountId, { count: 0, windowStart: now });
+  }
+
+  const limiter = rateLimiter.get(accountId);
+
+  // Reset window if expired
+  if (now - limiter.windowStart > CONFIG.RATE_LIMIT_WINDOW) {
+    limiter.count = 0;
+    limiter.windowStart = now;
+  }
+
+  // Check if limit exceeded
+  if (limiter.count >= CONFIG.RATE_LIMIT_MAX_MESSAGES) {
+    const resetIn = Math.ceil(
+      (limiter.windowStart + CONFIG.RATE_LIMIT_WINDOW - now) / 1000
+    );
+    return { allowed: false, resetIn };
+  }
+
+  limiter.count++;
+  return { allowed: true };
+}
+
+// Check daily limits
+async function checkDailyLimit(accountId) {
+  const now = Date.now();
+  const today = new Date().toDateString();
+
+  if (!dailyLimits.has(accountId)) {
+    dailyLimits.set(accountId, {
+      date: today,
+      messageCount: 0,
+      newChatsCount: 0,
+    });
+  }
+
+  const limits = dailyLimits.get(accountId);
+
+  // Reset if new day
+  if (limits.date !== today) {
+    limits.date = today;
+    limits.messageCount = 0;
+    limits.newChatsCount = 0;
+  }
+
+  // Get account creation date to determine limits
+  const account = await prisma.whatsAppAccount.findUnique({
+    where: { id: accountId },
+  });
+
+  if (!account) {
+    return { allowed: false, reason: "Account not found" };
+  }
+
+  // If useLimits is false, always allow
+  if (!account.useLimits) {
+    return { allowed: true, isNewAccount: false, noLimits: true };
+  }
+
+  const accountAge = Date.now() - new Date(account.createdAt).getTime();
+  const isNewAccount = accountAge < 7 * 24 * 60 * 60 * 1000; // 7 days
+
+  const dailyLimit = isNewAccount
+    ? CONFIG.DAILY_MESSAGE_LIMIT_NEW_ACCOUNT
+    : CONFIG.DAILY_MESSAGE_LIMIT_OLD_ACCOUNT;
+
+  if (limits.messageCount >= dailyLimit) {
+    return {
+      allowed: false,
+      reason: `Daily limit reached (${dailyLimit} messages)`,
+      isNewAccount,
+    };
+  }
+
+  return { allowed: true, isNewAccount };
+}
+
+// Check if account needs rest
+async function checkNeedRest(accountId) {
+  // Get account to check if limits should be applied
+  const account = await prisma.whatsAppAccount.findUnique({
+    where: { id: accountId },
+  });
+
+  // If useLimits is false, never rest
+  if (!account || !account.useLimits) {
+    return { needRest: false, noLimits: true };
+  }
+
+  if (!messageCounters.has(accountId)) {
+    messageCounters.set(accountId, {
+      count: 0,
+      lastRest: Date.now(),
+      isResting: false,
+    });
+  }
+
+  const counter = messageCounters.get(accountId);
+
+  if (counter.isResting) {
+    return { needRest: true, reason: "Currently resting" };
+  }
+
+  if (counter.count >= CONFIG.REST_AFTER_MESSAGES) {
+    return { needRest: true, reason: "Need rest after messages" };
+  }
+
+  return { needRest: false };
+}
+
+// Clean up old client resources
+async function cleanupClient(accountId) {
+  const clientInfo = clients.get(accountId);
+  if (clientInfo && clientInfo.sock) {
+    try {
+      // Remove all listeners to prevent memory leaks
+      clientInfo.sock.ev.removeAllListeners();
+
+      // Close the socket
+      await clientInfo.sock.end();
+
+      logger.info(`Cleaned up old socket for ${accountId}`);
+    } catch (error) {
+      logger.error(`Error cleaning up client ${accountId}:`, error.message);
+    }
+  }
+  clients.delete(accountId);
+}
+
+// ==================== RECONNECTION LOGIC ====================
+
+// Reconnect with exponential backoff
+async function reconnectWithBackoff(accountId) {
+  if (isShuttingDown) return;
+
+  const attempts = reconnectAttempts.get(accountId) || 0;
+
+  if (attempts >= CONFIG.RECONNECT_MAX_RETRIES) {
+    logger.error(
+      `Max reconnection attempts (${CONFIG.RECONNECT_MAX_RETRIES}) reached for ${accountId}`
+    );
+    await updateAccountStatus(accountId, "FAILED");
+    reconnectAttempts.delete(accountId);
+    return;
+  }
+
+  const delay = getBackoffDelay(attempts);
+
+  logger.info(
+    `Reconnecting ${accountId} in ${Math.round(delay / 1000)}s (attempt ${
+      attempts + 1
+    }/${CONFIG.RECONNECT_MAX_RETRIES})`
+  );
+
+  setTimeout(async () => {
+    if (isShuttingDown) return;
+
+    reconnectAttempts.set(accountId, attempts + 1);
+
+    try {
+      await initializeClient(accountId);
+      // Reset attempts on successful connection
+      reconnectAttempts.delete(accountId);
+    } catch (error) {
+      const errorMsg = error.message || error.toString() || "Unknown error";
+      logger.error(`Reconnection failed for ${accountId}: ${errorMsg}`);
+      if (error.stack) {
+        logger.error(`Stack trace: ${error.stack}`);
+      }
+      // Schedule next attempt
+      await reconnectWithBackoff(accountId);
+    }
+  }, delay);
+}
+
+// ==================== HEARTBEAT SYSTEM ====================
+
+// Start heartbeat monitoring
+function startHeartbeat() {
+  if (heartbeatInterval) {
+    clearInterval(heartbeatInterval);
+  }
+
+  heartbeatInterval = setInterval(async () => {
+    if (isShuttingDown) return;
+
+    for (const [accountId, clientInfo] of clients.entries()) {
+      if (clientInfo.status === "CONNECTED") {
+        try {
+          // Use presence update as a ping mechanism
+          const pingStart = Date.now();
+
+          // Set a timeout for the ping
+          const pingPromise = clientInfo.sock.sendPresenceUpdate("available");
+          const timeoutPromise = new Promise((_, reject) =>
+            setTimeout(
+              () => reject(new Error("Heartbeat timeout")),
+              CONFIG.HEARTBEAT_TIMEOUT
+            )
+          );
+
+          await Promise.race([pingPromise, timeoutPromise]);
+
+          const latency = Date.now() - pingStart;
+          clientInfo.lastHeartbeat = Date.now();
+          clientInfo.latency = latency;
+
+          logger.debug(`Heartbeat OK for ${accountId} (${latency}ms)`);
+        } catch (error) {
+          logger.warn(`Heartbeat failed for ${accountId}: ${error.message}`);
+
+          // Mark as disconnected and try to reconnect
+          clientInfo.status = "DISCONNECTED";
+          await updateAccountStatus(accountId, "DISCONNECTED");
+
+          // Clean up and reconnect
+          await cleanupClient(accountId);
+          await reconnectWithBackoff(accountId);
+        }
+      }
+    }
+  }, CONFIG.HEARTBEAT_INTERVAL);
+
+  logger.info(
+    `Heartbeat monitoring started (interval: ${
+      CONFIG.HEARTBEAT_INTERVAL / 1000
+    }s)`
+  );
+}
+
+// Stop heartbeat monitoring
+function stopHeartbeat() {
+  if (heartbeatInterval) {
+    clearInterval(heartbeatInterval);
+    heartbeatInterval = null;
+    logger.info("Heartbeat monitoring stopped");
+  }
+}
+
+// ==================== MEMORY MANAGEMENT ====================
+
+// Start memory pressure monitoring
+function startMemoryMonitor() {
+  if (memoryMonitorInterval) {
+    clearInterval(memoryMonitorInterval);
+  }
+
+  memoryMonitorInterval = setInterval(async () => {
+    const used = process.memoryUsage();
+    const heapPercent = used.heapUsed / used.heapTotal;
+
+    if (heapPercent > CONFIG.MEMORY_CRITICAL_THRESHOLD) {
+      logger.error(
+        `CRITICAL: Memory usage at ${Math.round(heapPercent * 100)}%`
+      );
+
+      // Force garbage collection if available
+      if (global.gc) {
+        logger.info("Forcing garbage collection...");
+        global.gc();
+      }
+
+      // Disconnect least active accounts if still critical
+      const memAfterGC = process.memoryUsage();
+      if (
+        memAfterGC.heapUsed / memAfterGC.heapTotal >
+        CONFIG.MEMORY_CRITICAL_THRESHOLD
+      ) {
+        const clientsToDisconnect = Math.ceil(clients.size * 0.2);
+
+        if (clientsToDisconnect > 0 && clients.size > 1) {
+          logger.warn(
+            `Disconnecting ${clientsToDisconnect} client(s) due to memory pressure`
+          );
+
+          // Get clients sorted by last activity (oldest first)
+          const sortedClients = Array.from(clients.entries())
+            .sort((a, b) => (a[1].lastActivity || 0) - (b[1].lastActivity || 0))
+            .slice(0, clientsToDisconnect);
+
+          for (const [accountId] of sortedClients) {
+            try {
+              await cleanupClient(accountId);
+              await updateAccountStatus(accountId, "DISCONNECTED");
+              logger.info(
+                `Auto-disconnected ${accountId} due to memory pressure`
+              );
+            } catch (error) {
+              logger.error(`Failed to disconnect ${accountId}:`, error.message);
+            }
+          }
+        }
+      }
+    } else if (heapPercent > CONFIG.MEMORY_WARNING_THRESHOLD) {
+      logger.warn(`WARNING: Memory usage at ${Math.round(heapPercent * 100)}%`);
+    }
+  }, CONFIG.MEMORY_CHECK_INTERVAL);
+
+  logger.info("Memory monitoring started");
+}
+
+// ==================== MESSAGE QUEUE SYSTEM ====================
+
+// Add message to queue
+function enqueueMessage(accountId, to, message) {
+  if (!messageQueues.has(accountId)) {
+    messageQueues.set(accountId, []);
+  }
+
+  const queue = messageQueues.get(accountId);
+  const messageId = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+
+  queue.push({
+    id: messageId,
+    to,
+    message,
+    retries: 0,
+    createdAt: Date.now(),
+  });
+
+  return messageId;
+}
+
+// Send message with human-like behavior
+async function sendMessageWithHumanBehavior(accountId, jid, message) {
+  const clientInfo = clients.get(accountId);
+  if (!clientInfo || clientInfo.status !== "CONNECTED") {
+    throw new Error("Client not connected");
+  }
+
+  // Check if account uses limits
+  const account = await prisma.whatsAppAccount.findUnique({
+    where: { id: accountId },
+  });
+
+  // If no limits, send immediately without delays
+  if (account && !account.useLimits) {
+    const sentMessage = await clientInfo.sock.sendMessage(jid, {
+      text: message,
+    });
+    logger.info(`Message sent instantly (no limits) to ${jid}`);
+    return sentMessage;
+  }
+
+  // With limits - use human-like behavior
+  // 1. Случайная задержка перед началом печати (думаем, что написать)
+  const delayBeforeTyping = randomDelay(
+    CONFIG.DELAY_BEFORE_TYPING_MIN,
+    CONFIG.DELAY_BEFORE_TYPING_MAX
+  );
+  logger.debug(`Waiting ${delayBeforeTyping}ms before typing...`);
+  await sleep(delayBeforeTyping);
+
+  // 2. Отправляем статус "печатает"
+  try {
+    await clientInfo.sock.sendPresenceUpdate("composing", jid);
+    logger.debug(`Typing indicator sent to ${jid}`);
+  } catch (err) {
+    // Ignore presence update errors - not critical
+    logger.debug(
+      `Failed to send typing indicator: ${err.message || "Unknown error"}`
+    );
+  }
+
+  // 3. Эмулируем время печати на основе длины сообщения
+  const typingDuration = calculateTypingDelay(message);
+  logger.debug(
+    `Typing for ${typingDuration}ms (message length: ${message.length})`
+  );
+  await sleep(typingDuration);
+
+  // 4. Отправляем статус "онлайн" (закончили печатать)
+  try {
+    await clientInfo.sock.sendPresenceUpdate("paused", jid);
+  } catch (err) {
+    // Ignore presence update errors - not critical
+    logger.debug(
+      `Failed to send paused status: ${err.message || "Unknown error"}`
+    );
+  }
+
+  // 5. Небольшая задержка перед отправкой (проверяем сообщение)
+  await sleep(randomDelay(200, 800));
+
+  // 6. Отправляем сообщение
+  const sentMessage = await clientInfo.sock.sendMessage(jid, {
+    text: message,
+  });
+
+  logger.info(`Message sent with human-like behavior to ${jid}`);
+  return sentMessage;
+}
+
+// Process message queue for an account with automatic rate limit handling
+async function processMessageQueue(accountId) {
+  const queue = messageQueues.get(accountId);
+  if (!queue || queue.length === 0) {
+    logger.debug(`Queue empty for ${accountId}`);
+    return;
+  }
+
+  const clientInfo = clients.get(accountId);
+  if (!clientInfo || clientInfo.status !== "CONNECTED") {
+    logger.warn(
+      `Client ${accountId} not connected, queue paused (${queue.length} messages waiting)`
+    );
+    // Retry in 10 seconds
+    setTimeout(() => processMessageQueue(accountId), 10000);
+    return;
+  }
+
+  // Check if need rest
+  const restCheck = await checkNeedRest(accountId);
+  if (restCheck.needRest) {
+    const counter = messageCounters.get(accountId);
+    if (!counter.isResting) {
+      // Start rest period
+      counter.isResting = true;
+      const restDuration = randomDelay(
+        CONFIG.REST_DURATION_MIN,
+        CONFIG.REST_DURATION_MAX
+      );
+      logger.info(
+        `💤 Account ${accountId} taking a break for ${Math.round(
+          restDuration / 1000
+        )} seconds after ${counter.count} messages (${
+          queue.length
+        } messages in queue)`
+      );
+
+      setTimeout(() => {
+        counter.isResting = false;
+        counter.count = 0;
+        counter.lastRest = Date.now();
+        logger.info(
+          `✨ Account ${accountId} finished resting, resuming queue...`
+        );
+        processMessageQueue(accountId);
+      }, restDuration);
+    }
+    return;
+  }
+
+  // Check rate limit
+  const rateCheck = await checkRateLimit(accountId);
+  if (!rateCheck.allowed) {
+    logger.warn(
+      `⏳ Rate limit reached for ${accountId}. Waiting ${rateCheck.resetIn}s (${queue.length} messages in queue)...`
+    );
+    // Wait for rate limit reset, then continue
+    setTimeout(() => {
+      logger.info(`🔄 Rate limit reset for ${accountId}, resuming queue...`);
+      processMessageQueue(accountId);
+    }, rateCheck.resetIn * 1000);
+    return;
+  }
+
+  // Check daily limit
+  const dailyCheck = await checkDailyLimit(accountId);
+  if (!dailyCheck.allowed) {
+    logger.error(
+      `🚫 Daily limit reached for ${accountId}: ${dailyCheck.reason} (${queue.length} messages in queue)`
+    );
+    // Check again in 1 hour
+    setTimeout(() => {
+      logger.info(`🔄 Checking daily limit for ${accountId} again...`);
+      processMessageQueue(accountId);
+    }, 3600000);
+    return;
+  }
+
+  const msg = queue[0];
+
+  try {
+    // Format JID
+    let jid = msg.to;
+    if (!msg.to.includes("@")) {
+      jid = `${msg.to}@s.whatsapp.net`;
+    }
+
+    logger.info(
+      `📤 Processing message for ${accountId} to ${msg.to} (${queue.length} in queue)`
+    );
+
+    // Send message with human-like behavior
+    const sentMessage = await sendMessageWithHumanBehavior(
+      accountId,
+      jid,
+      msg.message
+    );
+
+    // Save to database
+    await prisma.message.create({
+      data: {
+        accountId,
+        chatId: jid,
+        direction: "OUTGOING",
+        message: msg.message,
+        to: msg.to,
+        status: "SENT",
+        contactNumber: msg.to,
+      },
+    });
+
+    // Increment daily counter
+    const limits = dailyLimits.get(accountId);
+    if (limits) {
+      limits.messageCount++;
+    }
+
+    // Increment message counter for rest periods
+    const counter = messageCounters.get(accountId);
+    if (counter) {
+      counter.count++;
+    }
+
+    // Remove from queue
+    queue.shift();
+
+    logger.info(
+      `✅ Message sent from ${accountId} to ${msg.to} (Daily: ${
+        limits?.messageCount || 0
+      }, Session: ${counter ? counter.count : 0}, Queue: ${
+        queue.length
+      } remaining)`
+    );
+
+    // Process next message with random delay (or immediately if no limits)
+    if (queue.length > 0) {
+      // Check if account has limits
+      const account = await prisma.whatsAppAccount.findUnique({
+        where: { id: accountId },
+      });
+
+      if (account && !account.useLimits) {
+        // No limits - process immediately
+        logger.debug(`⚡ Processing next message immediately (no limits)...`);
+        setTimeout(() => processMessageQueue(accountId), 100);
+      } else {
+        // With limits - use delay
+        const nextDelay = randomDelay(
+          CONFIG.DELAY_BETWEEN_MESSAGES_MIN,
+          CONFIG.DELAY_BETWEEN_MESSAGES_MAX
+        );
+        logger.debug(
+          `⏱️  Waiting ${Math.round(nextDelay / 1000)}s before next message...`
+        );
+        setTimeout(() => processMessageQueue(accountId), nextDelay);
+      }
+    } else {
+      logger.info(`🎉 Queue empty for ${accountId}`);
+    }
+
+    return sentMessage;
+  } catch (error) {
+    logger.error(`❌ Failed to send message from ${accountId}:`, error.message);
+
+    msg.retries++;
+
+    if (msg.retries >= CONFIG.MESSAGE_RETRY_COUNT) {
+      // Save failed message
+      await prisma.message.create({
+        data: {
+          accountId,
+          message: msg.message,
+          to: msg.to,
+          direction: "OUTGOING",
+          status: "FAILED",
+          contactNumber: msg.to,
+        },
+      });
+
+      queue.shift();
+      logger.error(
+        `🔴 Message permanently failed after ${CONFIG.MESSAGE_RETRY_COUNT} retries, skipping...`
+      );
+
+      // Continue with next message
+      if (queue.length > 0) {
+        setTimeout(() => processMessageQueue(accountId), 2000);
+      }
+    } else {
+      // Retry later
+      logger.info(
+        `🔄 Retrying message (attempt ${msg.retries + 1}/${
+          CONFIG.MESSAGE_RETRY_COUNT
+        })`
+      );
+      setTimeout(
+        () => processMessageQueue(accountId),
+        CONFIG.MESSAGE_RETRY_DELAY
+      );
+    }
+  }
+}
+
+// ==================== WHATSAPP CLIENT INITIALIZATION ====================
+
 // Initialize WhatsApp client with Baileys
 async function initializeClient(accountId) {
   if (isShuttingDown) {
     throw new Error("Server is shutting down");
   }
 
+  // Check for race condition
+  if (connectingAccounts.has(accountId)) {
+    throw new Error("Client is already being initialized");
+  }
+
   logger.info(`Initializing Baileys client for ${accountId}`);
 
-  const account = await prisma.whatsAppAccount.findUnique({
-    where: { id: accountId },
-  });
+  let account;
+  try {
+    account = await prisma.whatsAppAccount.findUnique({
+      where: { id: accountId },
+    });
 
-  if (!account) {
-    throw new Error("Account not found");
+    if (!account) {
+      throw new Error("Account not found");
+    }
+  } catch (dbError) {
+    logger.error(
+      `Database error while loading account ${accountId}:`,
+      dbError.message || dbError
+    );
+    throw dbError;
   }
 
-  // Check if client already exists
+  // Check if client already exists and connected
   if (clients.has(accountId)) {
     const existing = clients.get(accountId);
-    if (existing.status === "CONNECTED" || existing.status === "CONNECTING") {
-      throw new Error("Client already initialized");
+    if (existing.status === "CONNECTED") {
+      throw new Error("Client already connected");
     }
+    // Clean up existing client
+    await cleanupClient(accountId);
   }
+
+  // Mark as connecting to prevent race conditions
+  connectingAccounts.add(accountId);
 
   const sessionPath = getSessionPath(accountId);
 
@@ -104,7 +850,7 @@ async function initializeClient(accountId) {
     // Load auth state
     const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
 
-    // Create socket
+    // Create socket with optimized settings for long-term stability
     const sock = makeWASocket({
       version,
       logger: pino({ level: "silent" }), // Silent logger for socket
@@ -120,6 +866,17 @@ async function initializeClient(accountId) {
       generateHighQualityLinkPreview: true,
       syncFullHistory: false,
       browser: ["Syntlex WhatsApp Manager", "Chrome", "120.0.0"],
+      // Connection settings for stability
+      connectTimeoutMs: 60000,
+      defaultQueryTimeoutMs: 60000,
+      keepAliveIntervalMs: 25000, // Send keep-alive every 25 seconds
+      retryRequestDelayMs: 500,
+      qrTimeout: 60000,
+      // Message retry settings
+      getMessage: async key => {
+        // Return empty for now, can be enhanced to fetch from DB
+        return { conversation: "" };
+      },
     });
 
     const clientInfo = {
@@ -128,9 +885,22 @@ async function initializeClient(accountId) {
       status: "CONNECTING",
       qrCode: null,
       phoneNumber: null,
+      lastActivity: Date.now(),
+      lastHeartbeat: null,
+      latency: null,
     };
 
     clients.set(accountId, clientInfo);
+
+    // Set initialization timeout
+    const initTimeout = setTimeout(async () => {
+      if (clientInfo.status !== "CONNECTED") {
+        logger.error(`Initialization timeout for ${accountId}`);
+        await cleanupClient(accountId);
+        connectingAccounts.delete(accountId);
+        await updateAccountStatus(accountId, "FAILED");
+      }
+    }, CONFIG.INIT_TIMEOUT);
 
     // Handle connection updates
     sock.ev.on("connection.update", async update => {
@@ -153,30 +923,28 @@ async function initializeClient(accountId) {
 
       // Handle connection status
       if (connection === "close") {
-        const shouldReconnect =
-          lastDisconnect?.error?.output?.statusCode !==
-          DisconnectReason.loggedOut;
+        clearTimeout(initTimeout);
+        connectingAccounts.delete(accountId);
+
+        const statusCode = lastDisconnect?.error?.output?.statusCode;
+        const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
 
         logger.info(
-          `Connection closed for ${accountId}. Reconnect: ${shouldReconnect}`
+          `Connection closed for ${accountId}. Status: ${statusCode}, Reconnect: ${shouldReconnect}`
         );
 
+        // Clean up current client
+        await cleanupClient(accountId);
+
         if (shouldReconnect && !isShuttingDown) {
-          // Auto-reconnect after 5 seconds
-          setTimeout(() => {
-            initializeClient(accountId).catch(err => {
-              logger.error(`Failed to reconnect ${accountId}:`, err);
-            });
-          }, 5000);
+          // Use exponential backoff for reconnection
+          await reconnectWithBackoff(accountId);
         } else {
           await updateAccountStatus(accountId, "DISCONNECTED");
-          clients.delete(accountId);
+          reconnectAttempts.delete(accountId);
 
           // Clean up auth if logged out
-          if (
-            lastDisconnect?.error?.output?.statusCode ===
-            DisconnectReason.loggedOut
-          ) {
+          if (statusCode === DisconnectReason.loggedOut) {
             logger.info(`User logged out, cleaning auth for ${accountId}`);
             try {
               if (fs.existsSync(sessionPath)) {
@@ -188,9 +956,17 @@ async function initializeClient(accountId) {
           }
         }
       } else if (connection === "open") {
+        clearTimeout(initTimeout);
+        connectingAccounts.delete(accountId);
+
         logger.info(`Connection opened for ${accountId}`);
         clientInfo.status = "CONNECTED";
         clientInfo.qrCode = null;
+        clientInfo.lastActivity = Date.now();
+        clientInfo.lastHeartbeat = Date.now();
+
+        // Reset reconnection attempts on successful connection
+        reconnectAttempts.delete(accountId);
 
         // Get phone number
         const phoneNumber = sock.user?.id?.split(":")[0] || null;
@@ -199,6 +975,14 @@ async function initializeClient(accountId) {
         await updateAccountStatus(accountId, "CONNECTED", {
           phoneNumber,
           qrCode: null,
+        });
+
+        // Process any queued messages
+        processMessageQueue(accountId).catch(err => {
+          logger.error(
+            `Error processing message queue for ${accountId}:`,
+            err.message
+          );
         });
       } else if (connection === "connecting") {
         logger.info(`Connecting ${accountId}...`);
@@ -213,6 +997,8 @@ async function initializeClient(accountId) {
     // Handle incoming messages and save to database
     sock.ev.on("messages.upsert", async ({ messages, type }) => {
       if (type === "notify") {
+        clientInfo.lastActivity = Date.now();
+
         for (const msg of messages) {
           try {
             const messageText =
@@ -252,15 +1038,63 @@ async function initializeClient(accountId) {
         }
       }
     });
+
+    // Handle message status updates
+    sock.ev.on("messages.update", async updates => {
+      clientInfo.lastActivity = Date.now();
+
+      for (const update of updates) {
+        try {
+          if (update.update.status) {
+            const statusMap = {
+              1: "PENDING",
+              2: "SENT",
+              3: "DELIVERED",
+              4: "READ",
+            };
+
+            const newStatus = statusMap[update.update.status];
+            if (newStatus) {
+              logger.debug(
+                `Message ${update.key.id} status updated to ${newStatus}`
+              );
+            }
+          }
+        } catch (error) {
+          logger.error(`Failed to handle message update:`, error);
+        }
+      }
+    });
+
+    // Handle presence updates (typing, online, etc.)
+    sock.ev.on("presence.update", async update => {
+      clientInfo.lastActivity = Date.now();
+      logger.debug(
+        `Presence update: ${update.id} is ${
+          update.presences?.[update.id]?.lastKnownPresence
+        }`
+      );
+    });
+
+    // Handle errors
+    sock.ev.on("error", async error => {
+      logger.error(`Socket error for ${accountId}:`, error);
+      clientInfo.lastActivity = Date.now();
+    });
   } catch (error) {
-    logger.error(`Failed to initialize client for ${accountId}:`, error);
+    connectingAccounts.delete(accountId);
+    const errorMsg = error.message || error.toString() || "Unknown error";
+    logger.error(`Failed to initialize client for ${accountId}: ${errorMsg}`);
+    if (error.stack) {
+      logger.error(`Stack trace: ${error.stack}`);
+    }
     await updateAccountStatus(accountId, "FAILED");
-    clients.delete(accountId);
+    await cleanupClient(accountId);
     throw error;
   }
 }
 
-// Routes
+// ==================== API ROUTES ====================
 
 // Get all accounts
 app.get("/api/accounts", async (req, res) => {
@@ -275,6 +1109,8 @@ app.get("/api/accounts", async (req, res) => {
         ...account,
         clientStatus: clientStatus?.status || account.status,
         hasActiveClient: !!clientStatus,
+        lastHeartbeat: clientStatus?.lastHeartbeat || null,
+        latency: clientStatus?.latency || null,
       };
     });
 
@@ -288,11 +1124,13 @@ app.get("/api/accounts", async (req, res) => {
 // Create account
 app.post("/api/accounts", async (req, res) => {
   try {
-    const { name } = req.body;
+    const { name, useLimits = true } = req.body;
     const account = await prisma.whatsAppAccount.create({
-      data: { name },
+      data: { name, useLimits },
     });
-    logger.info(`Created account: ${account.id} (${name})`);
+    logger.info(
+      `Created account: ${account.id} (${name}) - useLimits: ${useLimits}`
+    );
     res.status(201).json(account);
   } catch (error) {
     logger.error("Failed to create account:", error);
@@ -316,6 +1154,8 @@ app.get("/api/accounts/:id", async (req, res) => {
       ...account,
       clientStatus: clientStatus?.status || account.status,
       hasActiveClient: !!clientStatus,
+      lastHeartbeat: clientStatus?.lastHeartbeat || null,
+      latency: clientStatus?.latency || null,
     });
   } catch (error) {
     logger.error("Failed to get account:", error);
@@ -323,31 +1163,106 @@ app.get("/api/accounts/:id", async (req, res) => {
   }
 });
 
+// Update account
+app.put("/api/accounts/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, useLimits } = req.body;
+
+    const updateData = {};
+    if (name !== undefined) updateData.name = name;
+    if (useLimits !== undefined) updateData.useLimits = useLimits;
+
+    const account = await prisma.whatsAppAccount.update({
+      where: { id },
+      data: updateData,
+    });
+
+    logger.info(`Updated account: ${id} - ${JSON.stringify(updateData)}`);
+    res.json(account);
+  } catch (error) {
+    logger.error("Failed to update account:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Connect account
 app.post("/api/accounts/:id/connect", async (req, res) => {
   try {
-    await initializeClient(req.params.id);
+    const accountId = req.params.id;
+
+    // Check if already connecting
+    if (connectingAccounts.has(accountId)) {
+      return res
+        .status(400)
+        .json({ error: "Client is already being initialized" });
+    }
+
+    // Check if already connected
+    const existing = clients.get(accountId);
+    if (existing && existing.status === "CONNECTED") {
+      return res.status(400).json({ error: "Client already connected" });
+    }
+
+    // If stuck in AUTHENTICATING for too long, force cleanup
+    if (
+      existing &&
+      (existing.status === "AUTHENTICATING" || existing.status === "CONNECTING")
+    ) {
+      const stuckTime = Date.now() - (existing.lastActivity || 0);
+      if (stuckTime > 120000) {
+        // 2 minutes
+        logger.warn(
+          `Account ${accountId} stuck in ${existing.status} for ${Math.round(
+            stuckTime / 1000
+          )}s, forcing cleanup`
+        );
+        await cleanupClient(accountId);
+        connectingAccounts.delete(accountId);
+      }
+    }
+
+    await initializeClient(accountId);
     res.json({ success: true, message: "Client initialization started" });
   } catch (error) {
-    logger.error("Failed to connect:", error);
-    res.status(500).json({ error: error.message });
+    const errorMsg = error.message || error.toString() || "Unknown error";
+    const errorStack = error.stack || "";
+    logger.error(`Failed to connect account ${accountId}: ${errorMsg}`);
+    if (errorStack) {
+      logger.error(`Stack trace: ${errorStack}`);
+    }
+    res.status(500).json({
+      error: errorMsg,
+      details: process.env.NODE_ENV === "development" ? errorStack : undefined,
+    });
   }
 });
 
 // Disconnect account
 app.post("/api/accounts/:id/disconnect", async (req, res) => {
   try {
-    const clientInfo = clients.get(req.params.id);
+    const accountId = req.params.id;
+    const clientInfo = clients.get(accountId);
+
     if (!clientInfo) {
       return res.status(404).json({ error: "Client not found" });
     }
 
-    // Close the socket
-    await clientInfo.sock.logout();
-    clients.delete(req.params.id);
-    await updateAccountStatus(req.params.id, "DISCONNECTED");
+    // Stop reconnection attempts
+    reconnectAttempts.delete(accountId);
+    connectingAccounts.delete(accountId);
 
-    logger.info(`Disconnected client: ${req.params.id}`);
+    // Close the socket
+    try {
+      await clientInfo.sock.logout();
+    } catch (e) {
+      // Ignore logout errors, just clean up
+    }
+
+    await cleanupClient(accountId);
+    await updateAccountStatus(accountId, "DISCONNECTED");
+
+    logger.info(`Disconnected client: ${accountId}`);
     res.json({ success: true });
   } catch (error) {
     logger.error("Failed to disconnect:", error);
@@ -355,38 +1270,134 @@ app.post("/api/accounts/:id/disconnect", async (req, res) => {
   }
 });
 
-// Delete account
-app.delete("/api/accounts/:id", async (req, res) => {
+// Reset account session - clears session and stops reconnection attempts
+app.post("/api/accounts/:id/reset-session", async (req, res) => {
   try {
-    const clientInfo = clients.get(req.params.id);
+    const accountId = req.params.id;
+
+    logger.info(`🔄 Resetting session for account: ${accountId}`);
+
+    // Stop all connection attempts
+    reconnectAttempts.delete(accountId);
+    connectingAccounts.delete(accountId);
+
+    // Cleanup client if exists
+    const clientInfo = clients.get(accountId);
     if (clientInfo) {
       try {
-        await clientInfo.sock.logout();
+        await clientInfo.sock.end();
       } catch (e) {
-        logger.error("Error during logout:", e);
+        // Ignore errors
       }
-      clients.delete(req.params.id);
+      await cleanupClient(accountId);
     }
 
-    // Delete session files
-    const sessionPath = getSessionPath(req.params.id);
+    // Clear session directory
+    const sessionPath = getSessionPath(accountId);
     if (fs.existsSync(sessionPath)) {
-      fs.rmSync(sessionPath, { recursive: true, force: true });
+      try {
+        fs.rmSync(sessionPath, { recursive: true, force: true });
+        logger.info(`Cleared session directory: ${sessionPath}`);
+      } catch (fsError) {
+        logger.error(`Failed to clear session directory: ${fsError.message}`);
+      }
     }
 
-    await prisma.whatsAppAccount.delete({
-      where: { id: req.params.id },
-    });
+    // Update status to DISCONNECTED
+    await updateAccountStatus(accountId, "DISCONNECTED");
 
-    logger.info(`Deleted account: ${req.params.id}`);
-    res.json({ success: true });
+    logger.info(`✅ Session reset complete for: ${accountId}`);
+    res.json({
+      success: true,
+      message:
+        "Session reset successfully. You can now reconnect with a new QR code.",
+    });
   } catch (error) {
-    logger.error("Failed to delete account:", error);
-    res.status(500).json({ error: error.message });
+    logger.error(`Failed to reset session for ${accountId}:`, error);
+    res.status(500).json({ error: error.message || "Failed to reset session" });
   }
 });
 
-// Send message
+// Delete account
+app.delete("/api/accounts/:id", async (req, res) => {
+  const accountId = req.params.id;
+  logger.info(`🗑️ DELETE request received for account: ${accountId}`);
+
+  try {
+    // Check if account exists
+    const account = await prisma.whatsAppAccount.findUnique({
+      where: { id: accountId },
+    });
+
+    if (!account) {
+      logger.warn(`Account not found: ${accountId}`);
+      return res.status(404).json({ error: "Account not found" });
+    }
+
+    logger.info(`Account found: ${account.name} (${accountId})`);
+
+    // Stop reconnection attempts
+    reconnectAttempts.delete(accountId);
+    logger.debug(`Stopped reconnection attempts for ${accountId}`);
+
+    // Cleanup client if exists
+    const clientInfo = clients.get(accountId);
+    if (clientInfo) {
+      logger.info(`Cleaning up active client for ${accountId}`);
+      try {
+        await clientInfo.sock.logout();
+        logger.debug(`Logged out client ${accountId}`);
+      } catch (e) {
+        logger.error(`Error during logout for ${accountId}:`, e);
+      }
+      await cleanupClient(accountId);
+      logger.info(`Client cleanup completed for ${accountId}`);
+    } else {
+      logger.debug(`No active client found for ${accountId}`);
+    }
+
+    // Delete session files
+    const sessionPath = getSessionPath(accountId);
+    if (fs.existsSync(sessionPath)) {
+      logger.info(`Deleting session files for ${accountId}`);
+      fs.rmSync(sessionPath, { recursive: true, force: true });
+      logger.debug(`Session files deleted for ${accountId}`);
+    } else {
+      logger.debug(`No session files found for ${accountId}`);
+    }
+
+    // Clear message queue
+    messageQueues.delete(accountId);
+    rateLimiter.delete(accountId);
+    dailyLimits.delete(accountId);
+    messageCounters.delete(accountId);
+    logger.debug(`Cleared all queues and limits for ${accountId}`);
+
+    // Delete from database
+    logger.info(`Deleting account from database: ${accountId}`);
+    await prisma.whatsAppAccount.delete({
+      where: { id: accountId },
+    });
+
+    logger.info(
+      `✅ Successfully deleted account: ${account.name} (${accountId})`
+    );
+    res.status(200).json({
+      success: true,
+      message: "Account deleted successfully",
+      accountId: accountId,
+    });
+  } catch (error) {
+    logger.error(`❌ Failed to delete account ${accountId}:`, error);
+    logger.error("Error stack:", error.stack);
+    res.status(500).json({
+      error: error.message || "Failed to delete account",
+      details: process.env.NODE_ENV === "development" ? error.stack : undefined,
+    });
+  }
+});
+
+// Send message - uses BullMQ for reliability
 app.post("/api/messages/send", async (req, res) => {
   try {
     const { accountId, to, message } = req.body;
@@ -395,67 +1406,134 @@ app.post("/api/messages/send", async (req, res) => {
       return res.status(400).json({ error: "Missing required fields" });
     }
 
-    const clientInfo = clients.get(accountId);
-    if (!clientInfo) {
-      return res.status(400).json({ error: "Client not initialized" });
+    // Check if client exists and is connected
+    let clientInfo = clients.get(accountId);
+
+    // Auto-connect if not connected
+    if (!clientInfo || clientInfo.status !== "CONNECTED") {
+      logger.info(
+        `🔄 Auto-connecting account ${accountId} for message send...`
+      );
+
+      try {
+        // Check if account exists
+        const account = await prisma.whatsAppAccount.findUnique({
+          where: { id: accountId },
+        });
+
+        if (!account) {
+          return res.status(404).json({ error: "Account not found" });
+        }
+
+        // Try to connect
+        if (!clientInfo) {
+          await initializeClient(accountId);
+        } else if (clientInfo.status === "DISCONNECTED") {
+          // Reconnect
+          await cleanupClient(accountId);
+          await initializeClient(accountId);
+        }
+
+        // Wait a bit for connection to establish
+        await new Promise(resolve => setTimeout(resolve, 2000));
+
+        // Check if connected now
+        clientInfo = clients.get(accountId);
+        if (!clientInfo || clientInfo.status !== "CONNECTED") {
+          return res.status(503).json({
+            error:
+              "Account is connecting. Please wait and try again in a few seconds.",
+            status: clientInfo?.status || "DISCONNECTED",
+          });
+        }
+
+        logger.info(`✅ Account ${accountId} auto-connected successfully`);
+      } catch (connectError) {
+        logger.error(
+          `Failed to auto-connect account ${accountId}:`,
+          connectError
+        );
+        return res.status(503).json({
+          error: "Failed to connect account. Please connect manually first.",
+          details: connectError.message,
+        });
+      }
     }
 
-    if (clientInfo.status !== "CONNECTED") {
-      return res
-        .status(400)
-        .json({ error: `Client not connected: ${clientInfo.status}` });
-    }
-
-    // Format phone number (add @s.whatsapp.net if not present)
-    let jid = to;
-    if (!to.includes("@")) {
-      jid = `${to}@s.whatsapp.net`;
-    }
-
-    // Send message
-    const sentMessage = await clientInfo.sock.sendMessage(jid, {
-      text: message,
-    });
-
-    // Save to database
-    await prisma.message.create({
+    // Create a temporary single-message contract
+    const tempContract = await prisma.contract.create({
       data: {
         accountId,
-        chatId: jid,
-        direction: "OUTGOING",
-        message,
-        to,
-        status: "SENT",
-        contactNumber: to,
+        name: `Single message to ${to}`,
+        totalCount: 1,
+        pendingCount: 1,
+        status: "PENDING",
+        recipients: {
+          create: {
+            phoneNumber: to,
+            message: message,
+            status: "PENDING",
+          },
+        },
+      },
+      include: {
+        recipients: true,
       },
     });
 
-    logger.info(`Message sent from ${accountId} to ${to}`);
+    // Add to BullMQ message queue directly (skip contract queue)
+    const recipient = tempContract.recipients[0];
 
-    res.json({
+    const job = await messageQueue.add(
+      `msg-${to}`,
+      {
+        contractId: tempContract.id,
+        recipientId: recipient.id,
+        accountId,
+        phoneNumber: to,
+        message: message,
+      },
+      {
+        priority: 10, // Higher priority than contract messages
+      }
+    );
+
+    // Mark contract as IN_PROGRESS
+    await prisma.contract.update({
+      where: { id: tempContract.id },
+      data: {
+        status: "IN_PROGRESS",
+        startedAt: new Date(),
+      },
+    });
+
+    logger.info(
+      `📥 Single message queued via BullMQ for ${accountId} to ${to}, Job ID: ${job.id}`
+    );
+
+    // Get queue stats
+    const queueCounts = await messageQueue.getJobCounts();
+    const dailyCheck = await checkDailyLimit(accountId);
+    const limitsInfo = dailyLimits.get(accountId);
+
+    res.status(202).json({
       success: true,
-      messageId: sentMessage.key.id,
-      timestamp: sentMessage.messageTimestamp,
+      queued: true,
+      messageId: tempContract.id, // ← Для обратной совместимости
+      contractId: tempContract.id,
+      recipientId: recipient.id,
+      jobId: job.id,
+      queuePosition: queueCounts.waiting + 1,
+      queueLength: queueCounts.waiting + queueCounts.active,
+      message: "Message queued via BullMQ for reliable delivery",
+      status: clientInfo.status,
+      dailyCount: limitsInfo?.messageCount || 0,
+      dailyLimit: dailyCheck.isNewAccount
+        ? CONFIG.DAILY_MESSAGE_LIMIT_NEW_ACCOUNT
+        : CONFIG.DAILY_MESSAGE_LIMIT_OLD_ACCOUNT,
     });
   } catch (error) {
-    logger.error("Failed to send message:", error);
-
-    // Save failed message
-    try {
-      await prisma.message.create({
-        data: {
-          accountId: req.body.accountId,
-          message: req.body.message,
-          to: req.body.to,
-          direction: "OUTGOING",
-          status: "FAILED",
-          contactNumber: req.body.to,
-        },
-      });
-    } catch (dbError) {
-      logger.error("Failed to save failed message:", dbError);
-    }
-
+    logger.error("Failed to queue message:", error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -546,27 +1624,619 @@ app.get("/api/accounts/:id/chats", async (req, res) => {
   }
 });
 
-// Health check endpoint
+// Get messages for a specific chat
+app.get("/api/accounts/:accountId/chats/:chatId", async (req, res) => {
+  try {
+    const { accountId, chatId } = req.params;
+    const decodedChatId = decodeURIComponent(chatId);
+
+    const messages = await prisma.message.findMany({
+      where: {
+        accountId,
+        chatId: decodedChatId,
+      },
+      orderBy: { sentAt: "asc" },
+    });
+
+    res.json(messages);
+  } catch (error) {
+    logger.error("Failed to get chat messages:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Send message to a specific chat - always queues message
+app.post("/api/accounts/:accountId/chats/:chatId", async (req, res) => {
+  try {
+    const { accountId, chatId } = req.params;
+    const { message } = req.body;
+    const decodedChatId = decodeURIComponent(chatId);
+
+    if (!message) {
+      return res.status(400).json({ error: "Message is required" });
+    }
+
+    // Check if client exists and is connected
+    let clientInfo = clients.get(accountId);
+
+    // Auto-connect if not connected
+    if (!clientInfo || clientInfo.status !== "CONNECTED") {
+      logger.info(
+        `🔄 Auto-connecting account ${accountId} for message send...`
+      );
+
+      try {
+        // Check if account exists
+        const account = await prisma.whatsAppAccount.findUnique({
+          where: { id: accountId },
+        });
+
+        if (!account) {
+          return res.status(404).json({ error: "Account not found" });
+        }
+
+        // Try to connect
+        if (!clientInfo) {
+          await initializeClient(accountId);
+        } else if (clientInfo.status === "DISCONNECTED") {
+          // Reconnect
+          await cleanupClient(accountId);
+          await initializeClient(accountId);
+        }
+
+        // Wait a bit for connection to establish
+        await new Promise(resolve => setTimeout(resolve, 2000));
+
+        // Check if connected now
+        clientInfo = clients.get(accountId);
+        if (!clientInfo || clientInfo.status !== "CONNECTED") {
+          return res.status(503).json({
+            error:
+              "Account is connecting. Please wait and try again in a few seconds.",
+            status: clientInfo?.status || "DISCONNECTED",
+          });
+        }
+
+        logger.info(`✅ Account ${accountId} auto-connected successfully`);
+      } catch (connectError) {
+        logger.error(
+          `Failed to auto-connect account ${accountId}:`,
+          connectError
+        );
+        return res.status(503).json({
+          error: "Failed to connect account. Please connect manually first.",
+          details: connectError.message,
+        });
+      }
+    }
+
+    // Extract contact number from chatId
+    const contactNumber = decodedChatId.split("@")[0];
+
+    // Get current queue status
+    const queue = messageQueues.get(accountId) || [];
+    const queueLength = queue.length;
+
+    // Always add to queue
+    const messageId = enqueueMessage(accountId, contactNumber, message);
+
+    logger.info(
+      `📥 Message queued for ${accountId} to chat ${decodedChatId} (Queue: ${
+        queueLength + 1
+      })`
+    );
+
+    // Start queue processing if not already running
+    if (queueLength === 0) {
+      logger.info(`🚀 Starting queue processor for ${accountId}`);
+      setTimeout(() => processMessageQueue(accountId), 100);
+    }
+
+    // Get limits info
+    const dailyCheck = await checkDailyLimit(accountId);
+    const limitsInfo = dailyLimits.get(accountId);
+
+    res.status(202).json({
+      success: true,
+      queued: true,
+      messageId,
+      queuePosition: queueLength + 1,
+      queueLength: queueLength + 1,
+      message: "Message queued for automatic delivery",
+      status: clientInfo.status,
+      dailyCount: limitsInfo?.messageCount || 0,
+      dailyLimit: dailyCheck.isNewAccount
+        ? CONFIG.DAILY_MESSAGE_LIMIT_NEW_ACCOUNT
+        : CONFIG.DAILY_MESSAGE_LIMIT_OLD_ACCOUNT,
+    });
+  } catch (error) {
+    logger.error("Failed to queue chat message:", error);
+    res.status(500).json({
+      error: error?.message || "Failed to queue message",
+      success: false,
+    });
+  }
+});
+
+// Get queue status for an account
+app.get("/api/accounts/:id/queue", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const queue = messageQueues.get(id) || [];
+    const counter = messageCounters.get(id);
+    const limitsInfo = dailyLimits.get(id);
+    const clientInfo = clients.get(id);
+
+    const dailyCheck = await checkDailyLimit(id);
+
+    res.json({
+      accountId: id,
+      queueLength: queue.length,
+      messages: queue.map((msg, index) => ({
+        position: index + 1,
+        to: msg.to,
+        message:
+          msg.message.substring(0, 50) + (msg.message.length > 50 ? "..." : ""),
+        retries: msg.retries,
+        createdAt: new Date(msg.createdAt).toISOString(),
+      })),
+      status: {
+        clientStatus: clientInfo?.status || "DISCONNECTED",
+        isResting: counter?.isResting || false,
+        messagesSinceRest: counter?.count || 0,
+        restThreshold: CONFIG.REST_AFTER_MESSAGES,
+      },
+      limits: {
+        dailyCount: limitsInfo?.messageCount || 0,
+        dailyLimit: dailyCheck.isNewAccount
+          ? CONFIG.DAILY_MESSAGE_LIMIT_NEW_ACCOUNT
+          : CONFIG.DAILY_MESSAGE_LIMIT_OLD_ACCOUNT,
+        isNewAccount: dailyCheck.isNewAccount,
+      },
+    });
+  } catch (error) {
+    logger.error("Failed to get queue status:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ==================== CONTRACT API ROUTES ====================
+
+// Create a new contract
+app.post("/api/contracts", async (req, res) => {
+  try {
+    const { accountId, name, recipients } = req.body;
+
+    if (!accountId || !name || !recipients || !Array.isArray(recipients)) {
+      return res.status(400).json({ error: "Missing required fields" });
+    }
+
+    if (recipients.length === 0) {
+      return res
+        .status(400)
+        .json({ error: "Recipients array cannot be empty" });
+    }
+
+    // Validate recipients format
+    for (const recipient of recipients) {
+      if (!recipient.phoneNumber || !recipient.message) {
+        return res.status(400).json({
+          error: "Each recipient must have phoneNumber and message",
+        });
+      }
+    }
+
+    // Check if account exists
+    const account = await prisma.whatsAppAccount.findUnique({
+      where: { id: accountId },
+    });
+
+    if (!account) {
+      return res.status(404).json({ error: "Account not found" });
+    }
+
+    // Create contract with recipients
+    const contract = await prisma.contract.create({
+      data: {
+        accountId,
+        name,
+        totalCount: recipients.length,
+        pendingCount: recipients.length,
+        status: "PENDING",
+        recipients: {
+          create: recipients.map(r => ({
+            phoneNumber: r.phoneNumber,
+            message: r.message,
+            status: "PENDING",
+          })),
+        },
+      },
+      include: {
+        recipients: true,
+      },
+    });
+
+    logger.info(
+      `Created contract: ${contract.name} (${contract.id}) with ${recipients.length} recipients`
+    );
+
+    res.status(201).json(contract);
+  } catch (error) {
+    logger.error("Failed to create contract:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get all contracts
+app.get("/api/contracts", async (req, res) => {
+  try {
+    const { accountId, status } = req.query;
+
+    const where = {};
+    if (accountId) where.accountId = accountId;
+    if (status) where.status = status;
+
+    const contracts = await prisma.contract.findMany({
+      where,
+      include: {
+        account: {
+          select: { id: true, name: true, phoneNumber: true },
+        },
+        _count: {
+          select: { recipients: true },
+        },
+      },
+      orderBy: { createdAt: "desc" },
+    });
+
+    res.json(contracts);
+  } catch (error) {
+    logger.error("Failed to get contracts:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get contract by ID with full details
+app.get("/api/contracts/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const contract = await prisma.contract.findUnique({
+      where: { id },
+      include: {
+        account: {
+          select: { id: true, name: true, phoneNumber: true },
+        },
+        recipients: {
+          orderBy: { createdAt: "asc" },
+        },
+      },
+    });
+
+    if (!contract) {
+      return res.status(404).json({ error: "Contract not found" });
+    }
+
+    res.json(contract);
+  } catch (error) {
+    logger.error("Failed to get contract:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Start/Resume contract processing
+app.post("/api/contracts/:id/start", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const contract = await prisma.contract.findUnique({
+      where: { id },
+      include: {
+        recipients: {
+          where: { status: { in: ["PENDING", "FAILED"] } },
+        },
+      },
+    });
+
+    if (!contract) {
+      return res.status(404).json({ error: "Contract not found" });
+    }
+
+    if (contract.status === "COMPLETED") {
+      return res.status(400).json({ error: "Contract already completed" });
+    }
+
+    if (contract.recipients.length === 0) {
+      return res
+        .status(400)
+        .json({ error: "No pending recipients to process" });
+    }
+
+    // Check if account is connected
+    const clientInfo = clients.get(contract.accountId);
+    if (!clientInfo || clientInfo.status !== "CONNECTED") {
+      return res.status(400).json({ error: "Account not connected" });
+    }
+
+    // Add contract to BullMQ queue
+    const job = await contractQueue.add(
+      `contract-${id}`,
+      {
+        contractId: id,
+      },
+      {
+        jobId: `contract-${id}`, // Prevent duplicates
+        removeOnComplete: false,
+        removeOnFail: false,
+      }
+    );
+
+    logger.info(
+      `📋 Queued contract for processing: ${contract.name} (${id}), Job ID: ${job.id}`
+    );
+
+    res.json({
+      success: true,
+      message: "Contract queued for processing",
+      contractId: id,
+      jobId: job.id,
+      pendingRecipients: contract.recipients.length,
+    });
+  } catch (error) {
+    logger.error("Failed to start contract:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Pause contract processing
+app.post("/api/contracts/:id/pause", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const contract = await prisma.contract.findUnique({
+      where: { id },
+    });
+
+    if (!contract) {
+      return res.status(404).json({ error: "Contract not found" });
+    }
+
+    if (contract.status !== "IN_PROGRESS") {
+      return res.status(400).json({ error: "Contract is not in progress" });
+    }
+
+    // Update contract status (workers will respect this)
+    await prisma.contract.update({
+      where: { id },
+      data: { status: "PAUSED" },
+    });
+
+    // Remove pending jobs from queue
+    const job = await contractQueue.getJob(`contract-${id}`);
+    if (job) {
+      await job.remove();
+      logger.info(`Removed contract job from queue: ${id}`);
+    }
+
+    logger.info(`⏸️  Paused contract: ${contract.name} (${id})`);
+
+    res.json({
+      success: true,
+      message: "Contract paused",
+    });
+  } catch (error) {
+    logger.error("Failed to pause contract:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get contract statistics
+app.get("/api/contracts/:id/stats", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const contract = await prisma.contract.findUnique({
+      where: { id },
+      include: {
+        recipients: true,
+      },
+    });
+
+    if (!contract) {
+      return res.status(404).json({ error: "Contract not found" });
+    }
+
+    // Group recipients by status
+    const successRecipients = contract.recipients.filter(
+      r => r.status === "SUCCESS"
+    );
+    const failedRecipients = contract.recipients.filter(
+      r => r.status === "FAILED"
+    );
+    const pendingRecipients = contract.recipients.filter(r =>
+      ["PENDING", "QUEUED", "SENDING"].includes(r.status)
+    );
+
+    const stats = {
+      contractId: id,
+      name: contract.name,
+      status: contract.status,
+      total: contract.totalCount,
+      success: contract.successCount,
+      failed: contract.failureCount,
+      pending: pendingRecipients.length,
+
+      successRate:
+        contract.totalCount > 0
+          ? ((contract.successCount / contract.totalCount) * 100).toFixed(2) +
+            "%"
+          : "0%",
+
+      successPhoneNumbers: successRecipients.map(r => ({
+        phoneNumber: r.phoneNumber,
+        sentAt: r.sentAt,
+      })),
+
+      failedPhoneNumbers: failedRecipients.map(r => ({
+        phoneNumber: r.phoneNumber,
+        errorMessage: r.errorMessage,
+        attempts: r.attempts,
+      })),
+
+      pendingPhoneNumbers: pendingRecipients.map(r => ({
+        phoneNumber: r.phoneNumber,
+        status: r.status,
+      })),
+
+      duration: contract.startedAt
+        ? Math.round((new Date() - new Date(contract.startedAt)) / 1000) + "s"
+        : null,
+
+      createdAt: contract.createdAt,
+      startedAt: contract.startedAt,
+      completedAt: contract.completedAt,
+    };
+
+    res.json(stats);
+  } catch (error) {
+    logger.error("Failed to get contract stats:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Delete contract
+app.delete("/api/contracts/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const contract = await prisma.contract.findUnique({
+      where: { id },
+    });
+
+    if (!contract) {
+      return res.status(404).json({ error: "Contract not found" });
+    }
+
+    // Remove from queue if exists
+    const job = await contractQueue.getJob(`contract-${id}`);
+    if (job) {
+      await job.remove();
+      logger.info(`Removed contract job from queue: ${id}`);
+    }
+
+    // Delete contract (recipients will be deleted by cascade)
+    await prisma.contract.delete({
+      where: { id },
+    });
+
+    logger.info(`🗑️  Deleted contract: ${contract.name} (${id})`);
+
+    res.json({ success: true });
+  } catch (error) {
+    logger.error("Failed to delete contract:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get queue status and metrics
+app.get("/api/queues/status", async (req, res) => {
+  try {
+    const contractQueueCounts = await contractQueue.getJobCounts();
+    const messageQueueCounts = await messageQueue.getJobCounts();
+
+    const activeContractJobs = await contractQueue.getActive();
+    const activeMessageJobs = await messageQueue.getActive();
+
+    const stats = {
+      contracts: {
+        waiting: contractQueueCounts.waiting,
+        active: contractQueueCounts.active,
+        completed: contractQueueCounts.completed,
+        failed: contractQueueCounts.failed,
+        delayed: contractQueueCounts.delayed,
+        activeJobs: activeContractJobs.map(j => ({
+          id: j.id,
+          data: j.data,
+          progress: j.progress,
+          attemptsMade: j.attemptsMade,
+        })),
+      },
+      messages: {
+        waiting: messageQueueCounts.waiting,
+        active: messageQueueCounts.active,
+        completed: messageQueueCounts.completed,
+        failed: messageQueueCounts.failed,
+        delayed: messageQueueCounts.delayed,
+        activeJobs: activeMessageJobs.slice(0, 10).map(j => ({
+          id: j.id,
+          phoneNumber: j.data.phoneNumber,
+          contractId: j.data.contractId,
+          progress: j.progress,
+          attemptsMade: j.attemptsMade,
+        })),
+      },
+    };
+
+    res.json(stats);
+  } catch (error) {
+    logger.error("Failed to get queue status:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Health check endpoint with detailed status
 app.get("/health", (req, res) => {
+  const used = process.memoryUsage();
+
   const health = {
     status: isShuttingDown ? "shutting_down" : "ok",
     uptime: process.uptime(),
+    uptimeFormatted: formatUptime(process.uptime()),
     timestamp: new Date().toISOString(),
     activeClients: clients.size,
+    connectingClients: connectingAccounts.size,
     clients: Array.from(clients.entries()).map(([id, info]) => ({
       accountId: id,
       status: info.status,
       hasPhone: !!info.phoneNumber,
+      lastHeartbeat: info.lastHeartbeat
+        ? new Date(info.lastHeartbeat).toISOString()
+        : null,
+      latency: info.latency,
+      lastActivity: info.lastActivity
+        ? new Date(info.lastActivity).toISOString()
+        : null,
     })),
     memory: {
-      heapUsed: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
-      heapTotal: Math.round(process.memoryUsage().heapTotal / 1024 / 1024),
-      rss: Math.round(process.memoryUsage().rss / 1024 / 1024),
+      heapUsed: Math.round(used.heapUsed / 1024 / 1024),
+      heapTotal: Math.round(used.heapTotal / 1024 / 1024),
+      heapPercent: Math.round((used.heapUsed / used.heapTotal) * 100),
+      rss: Math.round(used.rss / 1024 / 1024),
     },
+    reconnections: Object.fromEntries(reconnectAttempts),
   };
 
   res.json(health);
 });
+
+// Format uptime to human readable
+function formatUptime(seconds) {
+  const days = Math.floor(seconds / 86400);
+  const hours = Math.floor((seconds % 86400) / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const secs = Math.floor(seconds % 60);
+
+  const parts = [];
+  if (days > 0) parts.push(`${days}d`);
+  if (hours > 0) parts.push(`${hours}h`);
+  if (minutes > 0) parts.push(`${minutes}m`);
+  if (secs > 0 || parts.length === 0) parts.push(`${secs}s`);
+
+  return parts.join(" ");
+}
+
+// ==================== SERVER LIFECYCLE ====================
 
 // Restore connected clients on server start
 async function restoreConnectedClients() {
@@ -586,17 +2256,31 @@ async function restoreConnectedClients() {
       `Auto-restoring ${connectedAccounts.length} connected account(s)...`
     );
 
-    for (const account of connectedAccounts) {
+    // Restore with staggered delays to prevent overwhelming
+    for (let i = 0; i < connectedAccounts.length; i++) {
+      const account = connectedAccounts[i];
+
+      // Add delay between restores (2 seconds between each)
+      if (i > 0) {
+        await new Promise(resolve => setTimeout(resolve, 2000));
+      }
+
       try {
         logger.info(`Restoring: ${account.name} (${account.id})`);
         await initializeClient(account.id);
       } catch (error) {
-        logger.error(`Failed to restore ${account.name}:`, error.message);
+        logger.error(
+          `Failed to restore ${account.name} (${account.id}):`,
+          error.message || error
+        );
+        if (error.stack) {
+          logger.debug("Error stack:", error.stack);
+        }
       }
     }
 
     logger.info(
-      `Auto-restore initiated for ${connectedAccounts.length} account(s)`
+      `Auto-restore completed for ${connectedAccounts.length} account(s)`
     );
   } catch (error) {
     logger.error("Failed to restore connected clients:", error.message);
@@ -608,6 +2292,12 @@ async function gracefulShutdown(signal) {
   logger.info(`Received ${signal}, starting graceful shutdown...`);
   isShuttingDown = true;
 
+  // Stop monitoring
+  stopHeartbeat();
+  if (memoryMonitorInterval) {
+    clearInterval(memoryMonitorInterval);
+  }
+
   // Close all WhatsApp clients
   const shutdownPromises = [];
 
@@ -616,6 +2306,7 @@ async function gracefulShutdown(signal) {
 
     const promise = (async () => {
       try {
+        clientInfo.sock.ev.removeAllListeners();
         await clientInfo.sock.end();
         logger.info(`Client ${accountId} closed`);
       } catch (error) {
@@ -645,25 +2336,60 @@ async function gracefulShutdown(signal) {
 process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
 process.on("SIGINT", () => gracefulShutdown("SIGINT"));
 
-// Monitor resources every 5 minutes
+// Handle uncaught exceptions
+process.on("uncaughtException", error => {
+  logger.error("Uncaught exception:", error);
+  // Don't exit, try to recover
+});
+
+process.on("unhandledRejection", (reason, promise) => {
+  logger.error("Unhandled rejection:", reason);
+  // Don't exit, try to recover
+});
+
+// Monitor resources
 setInterval(() => {
   const used = process.memoryUsage();
   logger.info(
     {
       activeClients: clients.size,
+      connectingClients: connectingAccounts.size,
       memoryUsedMB: Math.round(used.heapUsed / 1024 / 1024),
       memoryTotalMB: Math.round(used.heapTotal / 1024 / 1024),
+      memoryPercent: Math.round((used.heapUsed / used.heapTotal) * 100),
       rssMB: Math.round(used.rss / 1024 / 1024),
       uptimeMinutes: Math.round(process.uptime() / 60),
+      reconnectAttempts: reconnectAttempts.size,
     },
     "Resource Monitor"
   );
-}, 300000); // 5 minutes
+}, CONFIG.RESOURCE_MONITOR_INTERVAL);
+
+// ==================== SERVER START ====================
 
 const PORT = process.env.API_PORT || 5001;
 const server = app.listen(PORT, async () => {
   logger.info(`WhatsApp API Server running on http://localhost:${PORT}`);
   logger.info(`Using Baileys - Pure WhatsApp Web API`);
+  logger.info(`Using BullMQ for reliable message queuing`);
+  logger.info(
+    `Configuration: Max retries=${CONFIG.RECONNECT_MAX_RETRIES}, Heartbeat=${
+      CONFIG.HEARTBEAT_INTERVAL / 1000
+    }s`
+  );
+
+  // Initialize BullMQ workers
+  initializeWorkers({
+    clients,
+    logger,
+    CONFIG,
+    checkRateLimit,
+    checkDailyLimit,
+    checkNeedRest,
+    sendMessageWithHumanBehavior,
+    messageCounters,
+    dailyLimits,
+  });
 
   // Reset intermediate states to DISCONNECTED
   try {
@@ -689,6 +2415,10 @@ const server = app.listen(PORT, async () => {
       logger.error("Failed to reset accounts:", error.message);
     }
   }
+
+  // Start monitoring systems
+  startHeartbeat();
+  startMemoryMonitor();
 
   // Auto-restore connected clients
   await restoreConnectedClients();

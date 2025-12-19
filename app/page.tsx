@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Plus,
@@ -16,7 +16,8 @@ import {
   Clock,
   User,
   Hash,
-  RefreshCw
+  RefreshCw,
+  Copy
 } from 'lucide-react';
 
 interface Account {
@@ -27,6 +28,7 @@ interface Account {
   qrCode: string | null;
   clientStatus: string;
   hasActiveClient: boolean;
+  useLimits: boolean;
   createdAt: string;
 }
 
@@ -40,8 +42,13 @@ export default function Dashboard() {
   const [regeneratingQR, setRegeneratingQR] = useState(false);
   const [newAccountName, setNewAccountName] = useState('');
   const [selectedAccount, setSelectedAccount] = useState<Account | null>(null);
-  const [refreshInterval, setRefreshInterval] = useState<NodeJS.Timeout | null>(null);
   const [sending, setSending] = useState(false);
+  const [useLimits, setUseLimits] = useState(true);
+
+  // Refs для отслеживания состояния без ре-рендеров
+  const accountsRef = useRef<Account[]>([]);
+  const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const isLoadingRef = useRef(false);
 
   // Проверка авторизации
   useEffect(() => {
@@ -49,67 +56,130 @@ export default function Dashboard() {
     if (!isAuth) {
       router.push('/login');
     }
+
   }, [router]);
 
-  // Загрузка аккаунтов
+  // Загрузка аккаунтов с защитой от множественных запросов
   const loadAccounts = async (showRefreshIndicator = false) => {
+    // Предотвращаем множественные одновременные запросы
+    if (isLoadingRef.current && !showRefreshIndicator) {
+      return;
+    }
+
+    isLoadingRef.current = true;
     if (showRefreshIndicator) setRefreshing(true);
+
     try {
-      const response = await fetch(`${API_URL}/api/accounts`);
+      const response = await fetch(`${API_URL}/api/accounts`, {
+        cache: 'no-store',
+        headers: {
+          'Cache-Control': 'no-cache',
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
       const data = await response.json();
+
+      // Обновляем ref и state
+      accountsRef.current = data;
       setAccounts(data);
+
     } catch (error) {
       console.error('Failed to load accounts:', error);
     } finally {
       setLoading(false);
+      isLoadingRef.current = false;
       if (showRefreshIndicator) setRefreshing(false);
     }
   };
 
+  // Начальная загрузка и polling
   useEffect(() => {
+    // Начальная загрузка
     loadAccounts();
 
-    // Умный polling: обновляем только когда есть аккаунты в процессе подключения
+    // Умный polling - обновляем только когда есть активные процессы
     const interval = setInterval(() => {
-      const hasConnectingAccounts = accounts.some(
+      const currentAccounts = accountsRef.current;
+
+      // Проверяем есть ли аккаунты в процессе подключения
+      const hasConnectingAccounts = currentAccounts.some(
         acc => ['CONNECTING', 'AUTHENTICATING', 'QR_READY'].includes(acc.clientStatus)
       );
 
       // Обновляем только если есть активные процессы подключения
-      if (hasConnectingAccounts || accounts.length === 0) {
+      if (hasConnectingAccounts) {
         loadAccounts();
       }
-    }, 5000); // Увеличено до 5 секунд
+    }, 5000); // Проверяем каждые 5 секунд
 
-    setRefreshInterval(interval);
-    return () => interval && clearInterval(interval);
-  }, [accounts]);
+    pollingIntervalRef.current = interval;
+
+    // Cleanup
+    return () => {
+      if (interval) {
+        clearInterval(interval);
+      }
+    };
+  }, []); // Только при монтировании
 
   // Создание аккаунта
   const createAccount = async () => {
-    if (!newAccountName.trim()) return;
+    if (!newAccountName.trim()) {
+      alert('⚠️ Please enter an account name');
+      return;
+    }
+
     try {
       const response = await fetch(`${API_URL}/api/accounts`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: newAccountName }),
+        body: JSON.stringify({ name: newAccountName.trim(), useLimits }),
       });
-      if (response.ok) {
-        setNewAccountName('');
-        await loadAccounts();
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ error: 'Failed to create account' }));
+        throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
       }
+
+      const newAccount = await response.json();
+
+      // Очищаем форму
+      setNewAccountName('');
+      setUseLimits(true);
+
+      // Обновляем список
+      await loadAccounts(true);
+
+      // Автоматически выбираем новый аккаунт
+      setSelectedAccount(newAccount);
+
+      alert('✅ Account created successfully!');
     } catch (error) {
       console.error('Failed to create account:', error);
+      alert('❌ Failed to create account. Please try again.');
     }
   };
 
   // Подключение
   const connectAccount = async (accountId: string) => {
     try {
-      await fetch(`${API_URL}/api/accounts/${accountId}/connect`, { method: 'POST' });
-      await loadAccounts();
+      const response = await fetch(`${API_URL}/api/accounts/${accountId}/connect`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      await loadAccounts(true);
     } catch (error) {
       console.error('Failed to connect:', error);
+      alert('❌ Failed to connect account. Please try again.');
     }
   };
 
@@ -118,14 +188,33 @@ export default function Dashboard() {
     setRegeneratingQR(true);
     try {
       // Сначала отключаем
-      await fetch(`${API_URL}/api/accounts/${accountId}/disconnect`, { method: 'POST' });
+      const disconnectRes = await fetch(`${API_URL}/api/accounts/${accountId}/disconnect`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+
+      if (!disconnectRes.ok) {
+        throw new Error('Failed to disconnect');
+      }
+
       // Ждем немного
       await new Promise(resolve => setTimeout(resolve, 1000));
+
       // Затем снова подключаем
-      await fetch(`${API_URL}/api/accounts/${accountId}/connect`, { method: 'POST' });
-      await loadAccounts();
+      const connectRes = await fetch(`${API_URL}/api/accounts/${accountId}/connect`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+
+      if (!connectRes.ok) {
+        throw new Error('Failed to reconnect');
+      }
+
+      await loadAccounts(true);
+      alert('✅ QR Code regenerated successfully!');
     } catch (error) {
       console.error('Failed to regenerate QR:', error);
+      alert('❌ Failed to regenerate QR code. Please try again.');
     } finally {
       setRegeneratingQR(false);
     }
@@ -134,50 +223,182 @@ export default function Dashboard() {
   // Отключение
   const disconnectAccount = async (accountId: string) => {
     try {
-      await fetch(`${API_URL}/api/accounts/${accountId}/disconnect`, { method: 'POST' });
-      await loadAccounts();
-      if (selectedAccount?.id === accountId) setSelectedAccount(null);
+      const response = await fetch(`${API_URL}/api/accounts/${accountId}/disconnect`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      await loadAccounts(true);
+
+      if (selectedAccount?.id === accountId) {
+        setSelectedAccount(null);
+      }
+
+      alert('✅ Account disconnected successfully!');
     } catch (error) {
       console.error('Failed to disconnect:', error);
+      alert('❌ Failed to disconnect account. Please try again.');
+    }
+  };
+
+  // Изменение useLimits
+  const toggleUseLimits = async (accountId: string, currentValue: boolean) => {
+    try {
+      const response = await fetch(`${API_URL}/api/accounts/${accountId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ useLimits: !currentValue }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const updatedAccount = await response.json();
+
+      await loadAccounts(true);
+
+      // Обновляем выбранный аккаунт если это он
+      if (selectedAccount?.id === accountId) {
+        setSelectedAccount(updatedAccount);
+      }
+
+      alert(`✅ Rate limits ${!currentValue ? 'enabled' : 'disabled'} successfully!`);
+    } catch (error) {
+      console.error('Failed to toggle limits:', error);
+      alert('❌ Failed to update rate limits. Please try again.');
+    }
+  };
+
+  // Копирование ссылки на QR
+  const copyQRLink = async (accountId: string) => {
+    const link = `${window.location.origin}/qr/${accountId}`;
+    try {
+      await navigator.clipboard.writeText(link);
+      alert('✅ QR link copied to clipboard!');
+    } catch (error) {
+      console.error('Failed to copy link:', error);
+      // Fallback для старых браузеров
+      const textArea = document.createElement('textarea');
+      textArea.value = link;
+      document.body.appendChild(textArea);
+      textArea.select();
+      try {
+        document.execCommand('copy');
+        alert('✅ QR link copied to clipboard!');
+      } catch (err) {
+        alert('❌ Failed to copy link. Please copy manually: ' + link);
+      }
+      document.body.removeChild(textArea);
     }
   };
 
   // Удаление
   const deleteAccount = async (accountId: string) => {
-    if (!confirm('Delete this account?')) return;
+    if (!confirm('Are you sure you want to delete this account? This action cannot be undone.')) return;
+
+    console.log('🗑️ Starting delete for account:', accountId);
+
     try {
-      await fetch(`${API_URL}/api/accounts/${accountId}`, { method: 'DELETE' });
-      await loadAccounts();
-      if (selectedAccount?.id === accountId) setSelectedAccount(null);
-    } catch (error) {
-      console.error('Failed to delete:', error);
+      const deleteUrl = `${API_URL}/api/accounts/${accountId}`;
+      console.log('DELETE URL:', deleteUrl);
+
+      const response = await fetch(deleteUrl, {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+        },
+      });
+
+      console.log('DELETE Response status:', response.status);
+      console.log('DELETE Response ok:', response.ok);
+
+      // Попытка прочитать тело ответа
+      let responseData;
+      try {
+        const text = await response.text();
+        console.log('DELETE Response text:', text);
+        responseData = text ? JSON.parse(text) : {};
+      } catch (parseError) {
+        console.error('Failed to parse response:', parseError);
+        responseData = {};
+      }
+
+      if (!response.ok) {
+        const errorMessage = responseData.error || `HTTP error! status: ${response.status}`;
+        console.error('DELETE failed:', errorMessage);
+        throw new Error(errorMessage);
+      }
+
+      console.log('✅ DELETE successful, response:', responseData);
+
+      // Успешно удалено - обновляем список
+      await loadAccounts(true);
+
+      // Если удален выбранный аккаунт, снимаем выбор
+      if (selectedAccount?.id === accountId) {
+        setSelectedAccount(null);
+      }
+
+      alert('✅ Account deleted successfully!');
+    } catch (error: any) {
+      console.error('❌ Failed to delete account:', error);
+      console.error('Error details:', {
+        message: error.message,
+        stack: error.stack,
+      });
+      alert(`❌ Failed to delete account: ${error.message || 'Unknown error'}`);
     }
   };
 
   // Отправка сообщения
   const sendMessage = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    if (!selectedAccount) return;
+
+    if (!selectedAccount) {
+      alert('⚠️ Please select an account first');
+      return;
+    }
+
     setSending(true);
+
     const formData = new FormData(e.currentTarget);
-    const to = formData.get('to') as string;
-    const message = formData.get('message') as string;
+    const to = (formData.get('to') as string).trim();
+    const message = (formData.get('message') as string).trim();
+
+    if (!to || !message) {
+      alert('⚠️ Please fill in all fields');
+      setSending(false);
+      return;
+    }
 
     try {
       const response = await fetch(`${API_URL}/api/messages/send`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ accountId: selectedAccount.id, to, message }),
+        body: JSON.stringify({
+          accountId: selectedAccount.id,
+          to,
+          message,
+        }),
       });
+
       const data = await response.json();
+
       if (response.ok) {
         e.currentTarget.reset();
-        alert('Message sent!');
+        alert('✅ Message sent successfully!');
       } else {
-        alert(data.error || 'Failed to send');
+        throw new Error(data.error || 'Failed to send message');
       }
-    } catch (error) {
-      alert('Sent success');
+    } catch (error: any) {
+      console.error('Failed to send message:', error);
+      alert(`❌ ${error.message || 'Failed to send message. Please try again.'}`);
     } finally {
       setSending(false);
     }
@@ -243,23 +464,34 @@ export default function Dashboard() {
             <Plus className="w-5 h-5" />
             Create New Account
           </h2>
-          <div className="flex gap-3">
-            <input
-              type="text"
-              value={newAccountName}
-              onChange={(e) => setNewAccountName(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && createAccount()}
-              placeholder="Enter account name..."
-              className="flex-1 px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-white/20 focus:border-white/50 transition"
-            />
-            <button
-              onClick={createAccount}
-              disabled={!newAccountName.trim()}
-              className="px-6 py-3 bg-white text-black rounded-lg font-medium hover:bg-gray-200 disabled:bg-gray-800 disabled:text-gray-500 disabled:cursor-not-allowed transition flex items-center gap-2"
-            >
-              <Plus className="w-4 h-4" />
-              Create
-            </button>
+          <div className="space-y-3">
+            <div className="flex gap-3">
+              <input
+                type="text"
+                value={newAccountName}
+                onChange={(e) => setNewAccountName(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && createAccount()}
+                placeholder="Enter account name..."
+                className="flex-1 px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-white/20 focus:border-white/50 transition"
+              />
+              <button
+                onClick={createAccount}
+                disabled={!newAccountName.trim()}
+                className="px-6 py-3 bg-white text-black rounded-lg font-medium hover:bg-gray-200 disabled:bg-gray-800 disabled:text-gray-500 disabled:cursor-not-allowed transition flex items-center gap-2"
+              >
+                <Plus className="w-4 h-4" />
+                Create
+              </button>
+            </div>
+            <label className="flex items-center gap-2 text-sm text-gray-400 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={useLimits}
+                onChange={(e) => setUseLimits(e.target.checked)}
+                className="w-4 h-4 rounded border-gray-600 bg-gray-800 text-white focus:ring-2 focus:ring-white/20"
+              />
+              <span>Use rate limits (recommended for new accounts)</span>
+            </label>
           </div>
         </div>
 
@@ -318,6 +550,11 @@ export default function Dashboard() {
                               {account.phoneNumber}
                             </p>
                           )}
+                          <div className="flex items-center gap-2 mt-2">
+                            <span className={`text-xs px-2 py-0.5 rounded-full ${account.useLimits ? 'bg-yellow-500/10 text-yellow-400' : 'bg-green-500/10 text-green-400'}`}>
+                              {account.useLimits ? '⚡ With Limits' : '🚀 No Limits'}
+                            </span>
+                          </div>
                         </div>
                         <div className={`flex items-center gap-2 px-3 py-1 rounded-full text-xs font-medium ${status.bg} ${status.color}`}>
                           <StatusIcon className={`w-3 h-3 ${status.label.includes('Connecting') ? 'animate-spin' : ''}`} />
@@ -351,6 +588,17 @@ export default function Dashboard() {
                             Disconnect
                           </button>
                         )}
+
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            copyQRLink(account.id);
+                          }}
+                          className="px-3 py-2 bg-blue-500/10 text-blue-400 rounded-lg text-sm font-medium hover:bg-blue-500/20 transition flex items-center gap-1"
+                          title="Copy QR Link"
+                        >
+                          <Copy className="w-3 h-3" />
+                        </button>
 
                         <button
                           onClick={(e) => {
@@ -413,6 +661,31 @@ export default function Dashboard() {
                           </>
                         );
                       })()}
+                    </div>
+                  </div>
+
+                  {/* Rate Limits Toggle */}
+                  <div className="pt-3 border-t border-gray-800">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="text-sm text-gray-500">Rate Limits</p>
+                        <p className="text-xs text-gray-600 mt-0.5">
+                          {selectedAccount.useLimits ? 'Limited sending (safe)' : 'Unlimited sending'}
+                        </p>
+                      </div>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          toggleUseLimits(selectedAccount.id, selectedAccount.useLimits);
+                        }}
+                        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${selectedAccount.useLimits ? 'bg-yellow-500' : 'bg-green-500'
+                          }`}
+                      >
+                        <span
+                          className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${selectedAccount.useLimits ? 'translate-x-6' : 'translate-x-1'
+                            }`}
+                        />
+                      </button>
                     </div>
                   </div>
                 </div>

@@ -14,10 +14,12 @@ model WhatsAppAccount {
   phoneNumber String?       @unique
   status      AccountStatus @default(DISCONNECTED)
   qrCode      String?       @db.Text
+  useLimits   Boolean       @default(true)
   createdAt   DateTime      @default(now())
   updatedAt   DateTime      @updatedAt
 
   messages    Message[]
+  contracts   Contract[]
 
   @@index([status])
   @@map("whatsapp_accounts")
@@ -69,5 +71,71 @@ enum MessageStatus {
   RECEIVED
   DELIVERED
   READ
+  FAILED
+}
+
+model Contract {
+  id          String         @id @default(cuid())
+  accountId   String
+  account     WhatsAppAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  name        String
+  totalCount  Int
+  successCount Int           @default(0)
+  failureCount Int           @default(0)
+  pendingCount Int           @default(0)
+
+  status      ContractStatus @default(PENDING)
+
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+  startedAt   DateTime?
+  completedAt DateTime?
+
+  recipients  ContractRecipient[]
+
+  @@index([accountId])
+  @@index([status])
+  @@map("contracts")
+}
+
+model ContractRecipient {
+  id          String              @id @default(cuid())
+  contractId  String
+  contract    Contract            @relation(fields: [contractId], references: [id], onDelete: Cascade)
+
+  phoneNumber String
+  message     String              @db.Text
+  status      RecipientStatus     @default(PENDING)
+
+  attempts    Int                 @default(0)
+  lastAttempt DateTime?
+  errorMessage String?            @db.Text
+
+  messageId   String?
+  sentAt      DateTime?
+
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+
+  @@index([contractId])
+  @@index([status])
+  @@index([phoneNumber])
+  @@map("contract_recipients")
+}
+
+enum ContractStatus {
+  PENDING
+  IN_PROGRESS
+  PAUSED
+  COMPLETED
+  FAILED
+}
+
+enum RecipientStatus {
+  PENDING
+  QUEUED
+  SENDING
+  SUCCESS
   FAILED
 }

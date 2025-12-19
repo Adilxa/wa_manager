@@ -7,7 +7,13 @@
       "Bash(git add:*)",
       "Bash(find:*)",
       "Bash(npx prisma migrate:*)",
-      "Bash(npx prisma db push)"
+      "Bash(npx prisma db push)",
+      "Bash(node --check:*)",
+      "Bash(curl:*)",
+      "Bash(node --version)",
+      "Bash(dir /s /b \"C:\\Users\\boss-\\OneDrive\\Рабочий стол\\Active Projects\\OCTO\\wa\\wa_manager\")",
+      "Bash(findstr:*)",
+      "Bash(dir:*)"
     ],
     "deny": [],
     "ask": []
