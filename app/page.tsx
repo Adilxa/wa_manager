@@ -443,7 +443,7 @@ export default function Dashboard() {
         <div className="mb-10 flex items-start justify-between">
           <div>
             <h1 className="text-4xl font-bold bg-gradient-to-r from-white to-gray-400 bg-clip-text text-transparent">
-              OCTO WhatsApp API
+              WhatsApp API
             </h1>
             <p className="text-gray-400 mt-2">Manage multiple WhatsApp accounts with ease</p>
           </div>

@@ -356,7 +356,7 @@ async function reconnectWithBackoff(accountId) {
       // Reset attempts on successful connection
       reconnectAttempts.delete(accountId);
     } catch (error) {
-      const errorMsg = error.message || error.toString() || 'Unknown error';
+      const errorMsg = error.message || error.toString() || "Unknown error";
       logger.error(`Reconnection failed for ${accountId}: ${errorMsg}`);
       if (error.stack) {
         logger.error(`Stack trace: ${error.stack}`);
@@ -813,7 +813,10 @@ async function initializeClient(accountId) {
       throw new Error("Account not found");
     }
   } catch (dbError) {
-    logger.error(`Database error while loading account ${accountId}:`, dbError.message || dbError);
+    logger.error(
+      `Database error while loading account ${accountId}:`,
+      dbError.message || dbError
+    );
     throw dbError;
   }
 
@@ -862,7 +865,7 @@ async function initializeClient(accountId) {
       markOnlineOnConnect: false,
       generateHighQualityLinkPreview: true,
       syncFullHistory: false,
-      browser: ["OCTO WhatsApp Manager", "Chrome", "120.0.0"],
+      browser: ["Syntlex WhatsApp Manager", "Chrome", "120.0.0"],
       // Connection settings for stability
       connectTimeoutMs: 60000,
       defaultQueryTimeoutMs: 60000,
@@ -1080,7 +1083,7 @@ async function initializeClient(accountId) {
     });
   } catch (error) {
     connectingAccounts.delete(accountId);
-    const errorMsg = error.message || error.toString() || 'Unknown error';
+    const errorMsg = error.message || error.toString() || "Unknown error";
     logger.error(`Failed to initialize client for ${accountId}: ${errorMsg}`);
     if (error.stack) {
       logger.error(`Stack trace: ${error.stack}`);
@@ -1202,10 +1205,18 @@ app.post("/api/accounts/:id/connect", async (req, res) => {
     }
 
     // If stuck in AUTHENTICATING for too long, force cleanup
-    if (existing && (existing.status === "AUTHENTICATING" || existing.status === "CONNECTING")) {
+    if (
+      existing &&
+      (existing.status === "AUTHENTICATING" || existing.status === "CONNECTING")
+    ) {
       const stuckTime = Date.now() - (existing.lastActivity || 0);
-      if (stuckTime > 120000) { // 2 minutes
-        logger.warn(`Account ${accountId} stuck in ${existing.status} for ${Math.round(stuckTime/1000)}s, forcing cleanup`);
+      if (stuckTime > 120000) {
+        // 2 minutes
+        logger.warn(
+          `Account ${accountId} stuck in ${existing.status} for ${Math.round(
+            stuckTime / 1000
+          )}s, forcing cleanup`
+        );
         await cleanupClient(accountId);
         connectingAccounts.delete(accountId);
       }
@@ -1214,15 +1225,15 @@ app.post("/api/accounts/:id/connect", async (req, res) => {
     await initializeClient(accountId);
     res.json({ success: true, message: "Client initialization started" });
   } catch (error) {
-    const errorMsg = error.message || error.toString() || 'Unknown error';
-    const errorStack = error.stack || '';
+    const errorMsg = error.message || error.toString() || "Unknown error";
+    const errorStack = error.stack || "";
     logger.error(`Failed to connect account ${accountId}: ${errorMsg}`);
     if (errorStack) {
       logger.error(`Stack trace: ${errorStack}`);
     }
     res.status(500).json({
       error: errorMsg,
-      details: process.env.NODE_ENV === "development" ? errorStack : undefined
+      details: process.env.NODE_ENV === "development" ? errorStack : undefined,
     });
   }
 });
@@ -1298,7 +1309,8 @@ app.post("/api/accounts/:id/reset-session", async (req, res) => {
     logger.info(`✅ Session reset complete for: ${accountId}`);
     res.json({
       success: true,
-      message: "Session reset successfully. You can now reconnect with a new QR code."
+      message:
+        "Session reset successfully. You can now reconnect with a new QR code.",
     });
   } catch (error) {
     logger.error(`Failed to reset session for ${accountId}:`, error);
@@ -1399,7 +1411,9 @@ app.post("/api/messages/send", async (req, res) => {
 
     // Auto-connect if not connected
     if (!clientInfo || clientInfo.status !== "CONNECTED") {
-      logger.info(`🔄 Auto-connecting account ${accountId} for message send...`);
+      logger.info(
+        `🔄 Auto-connecting account ${accountId} for message send...`
+      );
 
       try {
         // Check if account exists
@@ -1427,17 +1441,21 @@ app.post("/api/messages/send", async (req, res) => {
         clientInfo = clients.get(accountId);
         if (!clientInfo || clientInfo.status !== "CONNECTED") {
           return res.status(503).json({
-            error: "Account is connecting. Please wait and try again in a few seconds.",
-            status: clientInfo?.status || "DISCONNECTED"
+            error:
+              "Account is connecting. Please wait and try again in a few seconds.",
+            status: clientInfo?.status || "DISCONNECTED",
           });
         }
 
         logger.info(`✅ Account ${accountId} auto-connected successfully`);
       } catch (connectError) {
-        logger.error(`Failed to auto-connect account ${accountId}:`, connectError);
+        logger.error(
+          `Failed to auto-connect account ${accountId}:`,
+          connectError
+        );
         return res.status(503).json({
           error: "Failed to connect account. Please connect manually first.",
-          details: connectError.message
+          details: connectError.message,
         });
       }
     }
@@ -1643,7 +1661,9 @@ app.post("/api/accounts/:accountId/chats/:chatId", async (req, res) => {
 
     // Auto-connect if not connected
     if (!clientInfo || clientInfo.status !== "CONNECTED") {
-      logger.info(`🔄 Auto-connecting account ${accountId} for message send...`);
+      logger.info(
+        `🔄 Auto-connecting account ${accountId} for message send...`
+      );
 
       try {
         // Check if account exists
@@ -1671,17 +1691,21 @@ app.post("/api/accounts/:accountId/chats/:chatId", async (req, res) => {
         clientInfo = clients.get(accountId);
         if (!clientInfo || clientInfo.status !== "CONNECTED") {
           return res.status(503).json({
-            error: "Account is connecting. Please wait and try again in a few seconds.",
-            status: clientInfo?.status || "DISCONNECTED"
+            error:
+              "Account is connecting. Please wait and try again in a few seconds.",
+            status: clientInfo?.status || "DISCONNECTED",
           });
         }
 
         logger.info(`✅ Account ${accountId} auto-connected successfully`);
       } catch (connectError) {
-        logger.error(`Failed to auto-connect account ${accountId}:`, connectError);
+        logger.error(
+          `Failed to auto-connect account ${accountId}:`,
+          connectError
+        );
         return res.status(503).json({
           error: "Failed to connect account. Please connect manually first.",
-          details: connectError.message
+          details: connectError.message,
         });
       }
     }
@@ -2245,7 +2269,10 @@ async function restoreConnectedClients() {
         logger.info(`Restoring: ${account.name} (${account.id})`);
         await initializeClient(account.id);
       } catch (error) {
-        logger.error(`Failed to restore ${account.name} (${account.id}):`, error.message || error);
+        logger.error(
+          `Failed to restore ${account.name} (${account.id}):`,
+          error.message || error
+        );
         if (error.stack) {
           logger.debug("Error stack:", error.stack);
         }

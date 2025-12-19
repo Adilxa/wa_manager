@@ -16,7 +16,7 @@ export default function LoginPage() {
     setLoading(true);
 
     setTimeout(() => {
-      if (password === '123321aslan') {
+      if (password === '123321syntlex') {
         localStorage.setItem('wa_manager_auth', 'true');
         router.push('/');
       } else {
@@ -34,7 +34,7 @@ export default function LoginPage() {
             <div className="inline-flex items-center justify-center w-16 h-16 bg-white/10 rounded-full mb-4">
               <Lock className="w-8 h-8 text-white" />
             </div>
-            <h1 className="text-3xl font-bold text-white mb-2">GREEN OCTO</h1>
+            <h1 className="text-3xl font-bold text-white mb-2">Syntlex</h1>
             <p className="text-gray-400">Enter password to continue</p>
           </div>
 

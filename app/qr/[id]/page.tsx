@@ -195,11 +195,10 @@ export default function QRPage() {
 
   return (
     <div
-      className={`min-h-screen flex items-center justify-center transition-all duration-1000 ${
-        isConnected
+      className={`min-h-screen flex items-center justify-center transition-all duration-1000 ${isConnected
           ? 'bg-gradient-to-br from-green-900 via-black to-black'
           : 'bg-black'
-      }`}
+        }`}
     >
       <div className="max-w-2xl w-full mx-4">
         <div className="bg-gray-900 border border-gray-800 rounded-2xl p-8 shadow-2xl">
@@ -315,7 +314,7 @@ export default function QRPage() {
         {/* Footer */}
         <div className="text-center mt-6">
           <p className="text-gray-500 text-sm">
-            OCTO WhatsApp Manager
+            WhatsApp Manager
           </p>
         </div>
       </div>
