@@ -1185,9 +1185,8 @@ app.put("/api/accounts/:id", async (req, res) => {
 
 // Connect account
 app.post("/api/accounts/:id/connect", async (req, res) => {
+  const accountId = req.params.id;
   try {
-    const accountId = req.params.id;
-
     // Check if already connecting
     if (connectingAccounts.has(accountId)) {
       return res
