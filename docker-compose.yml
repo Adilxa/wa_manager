@@ -57,21 +57,27 @@ services:
     volumes:
       - baileys_auth:/app/.baileys_auth
       - wa_logs:/app/logs
-    # ИСПРАВЛЕНО: убрали wget, используем curl
+    # Health check - проверяем оба сервиса
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000"]
+      test: ["CMD", "sh", "-c", "curl -f http://localhost:3000 && curl -f http://localhost:5001/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 40s
+      start_period: 60s
     deploy:
       resources:
         limits:
-          cpus: '1.0'          # Уменьшили с 2.0 до 1.0
-          memory: 512M         # Уменьшили с 2G до 512M
+          cpus: '1.0'
+          memory: 512M
         reservations:
           cpus: '0.5'
           memory: 256M
+      # Политика перезапуска при сбое
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+        window: 120s
     # Дополнительная безопасность
     security_opt:
       - no-new-privileges:true
