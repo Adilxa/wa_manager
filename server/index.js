@@ -681,14 +681,17 @@ async function processMessageQueue(accountId) {
   const msg = queue[0];
 
   try {
-    // Format JID
-    let jid = msg.to;
-    if (!msg.to.includes("@")) {
-      jid = `${msg.to}@s.whatsapp.net`;
+    // Clean phone number - extract only digits (remove @lid, @s.whatsapp.net, etc)
+    let cleanPhone = msg.to;
+    if (msg.to.includes("@")) {
+      cleanPhone = msg.to.split("@")[0];
     }
 
+    // Format JID for WhatsApp - always use @s.whatsapp.net for regular users
+    const jid = `${cleanPhone}@s.whatsapp.net`;
+
     logger.info(
-      `📤 Processing message for ${accountId} to ${msg.to} (${queue.length} in queue)`
+      `📤 Processing message for ${accountId} to ${cleanPhone} (${queue.length} in queue)`
     );
 
     // Send message with human-like behavior
@@ -705,9 +708,9 @@ async function processMessageQueue(accountId) {
         chatId: jid,
         direction: "OUTGOING",
         message: msg.message,
-        to: msg.to,
+        to: cleanPhone,
         status: "SENT",
-        contactNumber: msg.to,
+        contactNumber: cleanPhone,
       },
     });
 
@@ -767,15 +770,21 @@ async function processMessageQueue(accountId) {
     msg.retries++;
 
     if (msg.retries >= CONFIG.MESSAGE_RETRY_COUNT) {
+      // Clean phone number before saving
+      let cleanPhone = msg.to;
+      if (msg.to.includes("@")) {
+        cleanPhone = msg.to.split("@")[0];
+      }
+
       // Save failed message
       await prisma.message.create({
         data: {
           accountId,
           message: msg.message,
-          to: msg.to,
+          to: cleanPhone,
           direction: "OUTGOING",
           status: "FAILED",
-          contactNumber: msg.to,
+          contactNumber: cleanPhone,
         },
       });
 

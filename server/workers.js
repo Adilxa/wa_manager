@@ -234,13 +234,16 @@ function startMessageWorker() {
           data: { status: "SENDING" },
         });
 
-        // Format JID
-        let jid = phoneNumber;
-        if (!jid.includes("@")) {
-          jid = `${jid}@s.whatsapp.net`;
+        // Clean phone number - extract only digits (remove @lid, @s.whatsapp.net, etc)
+        let cleanPhone = phoneNumber;
+        if (phoneNumber.includes("@")) {
+          cleanPhone = phoneNumber.split("@")[0];
         }
 
-        logger.info(`📤 Sending to ${phoneNumber} (Contract: ${contractId})`);
+        // Format JID for WhatsApp - always use @s.whatsapp.net for regular users
+        const jid = `${cleanPhone}@s.whatsapp.net`;
+
+        logger.info(`📤 Sending to ${cleanPhone} (Contract: ${contractId})`);
 
         // Send message with human-like behavior
         await sendMessageWithHumanBehavior(accountId, jid, message);
@@ -252,9 +255,9 @@ function startMessageWorker() {
             chatId: jid,
             direction: "OUTGOING",
             message: message,
-            to: phoneNumber,
+            to: cleanPhone,
             status: "SENT",
-            contactNumber: phoneNumber,
+            contactNumber: cleanPhone,
           },
         });
 
