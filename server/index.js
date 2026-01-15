@@ -1032,15 +1032,20 @@ async function initializeClient(accountId) {
             const chatId = msg.key.remoteJid;
             const isFromMe = msg.key.fromMe;
 
+            // FULL DEBUG - Log entire message structure
+            logger.info(`\n========== MESSAGE DEBUG ==========`);
+            logger.info(`Message text: ${messageText.substring(0, 50)}...`);
+            logger.info(`msg.key:`, JSON.stringify(msg.key, null, 2));
+            logger.info(`msg.pushName: ${msg.pushName || "none"}`);
+            logger.info(`msg.verifiedBizName: ${msg.verifiedBizName || "none"}`);
+
             // For group/channel messages, participant contains the real sender
             // For direct messages, remoteJid is the contact
             const senderJid = msg.key.participant || chatId;
             const contactNumber = extractPhoneNumber(senderJid);
 
-            // Debug log to understand message structure
-            logger.info(
-              `📨 Message received: remoteJid=${chatId}, participant=${msg.key.participant || "none"}, senderJid=${senderJid}, extractedNumber=${contactNumber}, fromMe=${isFromMe}`
-            );
+            logger.info(`Extracted: senderJid=${senderJid}, contactNumber=${contactNumber}`);
+            logger.info(`===================================\n`);
 
             // Skip if we can't extract a valid phone number
             if (!contactNumber) {
