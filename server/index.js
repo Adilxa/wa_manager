@@ -1028,6 +1028,11 @@ async function initializeClient(accountId) {
             const senderJid = msg.key.participant || chatId;
             const contactNumber = extractPhoneNumber(senderJid);
 
+            // Debug log to understand message structure
+            logger.info(
+              `📨 Message received: remoteJid=${chatId}, participant=${msg.key.participant || "none"}, senderJid=${senderJid}, extractedNumber=${contactNumber}, fromMe=${isFromMe}`
+            );
+
             // Skip if we can't extract a valid phone number
             if (!contactNumber) {
               logger.debug(
