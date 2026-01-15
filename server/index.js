@@ -137,6 +137,21 @@ function getSessionPath(accountId) {
   return path.join(SESSIONS_DIR, `session_${accountId}`);
 }
 
+// Helper function to extract phone number from WhatsApp JID
+// Returns phone number only for regular users (@s.whatsapp.net)
+// Returns null for newsletters/channels (@lid, @broadcast, etc)
+function extractPhoneNumber(jid) {
+  if (!jid) return null;
+
+  // Only extract number for regular WhatsApp users
+  if (jid.includes("@s.whatsapp.net")) {
+    return jid.split("@")[0];
+  }
+
+  // For other types (lid, broadcast, newsletter), return null
+  return null;
+}
+
 // Helper function to update account status
 async function updateAccountStatus(accountId, status, data = {}) {
   try {
@@ -1006,14 +1021,26 @@ async function initializeClient(accountId) {
             if (!messageText) continue;
 
             const chatId = msg.key.remoteJid;
-            const contactNumber = chatId.split("@")[0];
             const isFromMe = msg.key.fromMe;
+
+            // For group/channel messages, participant contains the real sender
+            // For direct messages, remoteJid is the contact
+            const senderJid = msg.key.participant || chatId;
+            const contactNumber = extractPhoneNumber(senderJid);
+
+            // Skip if we can't extract a valid phone number
+            if (!contactNumber) {
+              logger.debug(
+                `Skipping message - no valid contact number. ChatId: ${chatId}, Participant: ${msg.key.participant || "none"}`
+              );
+              continue;
+            }
 
             // Save to database
             await prisma.message.create({
               data: {
                 accountId,
-                chatId,
+                chatId: senderJid, // Use sender's JID as chatId for direct chats
                 direction: isFromMe ? "OUTGOING" : "INCOMING",
                 message: messageText,
                 to: isFromMe ? contactNumber : null,
@@ -1553,13 +1580,21 @@ app.get("/api/accounts/:id/chats", async (req, res) => {
     const chatsMap = new Map();
 
     messages.forEach(msg => {
-      const key = msg.contactNumber || msg.to || msg.from || msg.chatId;
-      if (!key) return;
+      // Extract phone number properly - skip non-user chats
+      const contactNumber = msg.contactNumber || extractPhoneNumber(msg.chatId);
+
+      // Skip messages from channels/newsletters if contactNumber is null
+      if (!contactNumber) {
+        logger.debug(`Skipping non-user chat in list: ${msg.chatId}`);
+        return;
+      }
+
+      const key = contactNumber;
 
       if (!chatsMap.has(key)) {
         chatsMap.set(key, {
           chatId: msg.chatId,
-          contactNumber: msg.contactNumber || msg.to || msg.from,
+          contactNumber: contactNumber,
           contactName: msg.contactName,
           messages: [],
           unreadCount: 0,
@@ -1686,7 +1721,15 @@ app.post("/api/accounts/:accountId/chats/:chatId", async (req, res) => {
     }
 
     // Extract contact number from chatId
-    const contactNumber = decodedChatId.split("@")[0];
+    const contactNumber = extractPhoneNumber(decodedChatId);
+
+    // If this is not a regular user chat (e.g., newsletter/channel), return error
+    if (!contactNumber) {
+      return res.status(400).json({
+        error: "Cannot send messages to channels/newsletters. Only regular WhatsApp users are supported.",
+        chatId: decodedChatId
+      });
+    }
 
     // Get current queue status
     const queue = messageQueues.get(accountId) || [];

@@ -13,7 +13,9 @@
       "Bash(node --version)",
       "Bash(dir /s /b \"C:\\Users\\boss-\\OneDrive\\Рабочий стол\\Active Projects\\OCTO\\wa\\wa_manager\")",
       "Bash(findstr:*)",
-      "Bash(dir:*)"
+      "Bash(dir:*)",
+      "Bash(npm run dev:server:*)",
+      "Bash(pkill:*)"
     ],
     "deny": [],
     "ask": []
