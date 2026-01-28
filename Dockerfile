@@ -54,6 +54,7 @@ COPY --from=builder /app/public ./public
 COPY prisma ./prisma
 COPY server ./server
 COPY next.config.ts ./
+COPY ecosystem.config.js ./
 
 # Create directories for Baileys auth sessions and logs
 RUN mkdir -p .baileys_auth logs
@@ -69,9 +70,9 @@ USER nodejs
 # Expose ports (Next.js and API)
 EXPOSE 3000 5001
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD curl -f http://localhost:3000 || exit 1
+# Health check - check both services
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:3000 && curl -f http://localhost:5001/health || exit 1
 
-# Start both Next.js frontend and Baileys API server
-CMD ["sh", "-c", "npx prisma migrate deploy && node server/index.js & npx next start"]
+# Start with PM2 (auto-restarts processes if they crash)
+CMD ["sh", "-c", "npx prisma migrate deploy && npm run start:pm2"]

@@ -124,6 +124,9 @@ let heartbeatInterval = null;
 // Memory monitor interval reference
 let memoryMonitorInterval = null;
 
+// Watchdog interval reference
+let watchdogInterval = null;
+
 // Auth sessions directory
 const SESSIONS_DIR = path.join(process.cwd(), ".baileys_auth");
 if (!fs.existsSync(SESSIONS_DIR)) {
@@ -491,6 +494,114 @@ function startMemoryMonitor() {
   }, CONFIG.MEMORY_CHECK_INTERVAL);
 
   logger.info("Memory monitoring started");
+}
+
+// ==================== WATCHDOG FOR STUCK CONNECTIONS ====================
+
+// Start watchdog to monitor and cleanup stuck connections
+function startWatchdog() {
+  if (watchdogInterval) {
+    clearInterval(watchdogInterval);
+  }
+
+  watchdogInterval = setInterval(async () => {
+    const now = Date.now();
+    const STUCK_TIMEOUT = 300000; // 5 minutes
+    const CONNECTING_TIMEOUT = 120000; // 2 minutes
+
+    // Check for stuck connecting accounts
+    for (const accountId of connectingAccounts) {
+      const clientInfo = clients.get(accountId);
+      const timeSinceActivity = clientInfo?.lastActivity
+        ? now - clientInfo.lastActivity
+        : CONNECTING_TIMEOUT + 1;
+
+      if (timeSinceActivity > CONNECTING_TIMEOUT) {
+        logger.warn(
+          `Watchdog: Account ${accountId} stuck in connecting state for ${Math.round(
+            timeSinceActivity / 1000
+          )}s, forcing cleanup`
+        );
+
+        try {
+          await cleanupClient(accountId);
+          connectingAccounts.delete(accountId);
+          await updateAccountStatus(accountId, "DISCONNECTED");
+        } catch (error) {
+          logger.error(`Watchdog: Failed to cleanup ${accountId}:`, error.message);
+        }
+      }
+    }
+
+    // Check for stuck authenticating/connecting clients
+    for (const [accountId, clientInfo] of clients.entries()) {
+      if (
+        clientInfo.status === "AUTHENTICATING" ||
+        clientInfo.status === "CONNECTING"
+      ) {
+        const timeSinceActivity = clientInfo.lastActivity
+          ? now - clientInfo.lastActivity
+          : STUCK_TIMEOUT + 1;
+
+        if (timeSinceActivity > STUCK_TIMEOUT) {
+          logger.warn(
+            `Watchdog: Client ${accountId} stuck in ${
+              clientInfo.status
+            } for ${Math.round(timeSinceActivity / 1000)}s, forcing reconnect`
+          );
+
+          try {
+            await cleanupClient(accountId);
+            connectingAccounts.delete(accountId);
+
+            // Try to reconnect
+            setTimeout(() => {
+              logger.info(`Watchdog: Attempting to reconnect ${accountId}`);
+              initializeClient(accountId).catch((err) => {
+                logger.error(`Watchdog reconnect failed for ${accountId}:`, err.message);
+              });
+            }, 5000);
+          } catch (error) {
+            logger.error(`Watchdog: Failed to handle stuck client ${accountId}:`, error.message);
+          }
+        }
+      }
+    }
+
+    // Check for dead connections (no heartbeat for too long)
+    for (const [accountId, clientInfo] of clients.entries()) {
+      if (clientInfo.status === "CONNECTED" && clientInfo.lastHeartbeat) {
+        const timeSinceHeartbeat = now - clientInfo.lastHeartbeat;
+        const HEARTBEAT_DEAD_TIMEOUT = 180000; // 3 minutes
+
+        if (timeSinceHeartbeat > HEARTBEAT_DEAD_TIMEOUT) {
+          logger.warn(
+            `Watchdog: Client ${accountId} has no heartbeat for ${Math.round(
+              timeSinceHeartbeat / 1000
+            )}s, reconnecting`
+          );
+
+          try {
+            await cleanupClient(accountId);
+            await reconnectWithBackoff(accountId);
+          } catch (error) {
+            logger.error(`Watchdog: Failed to reconnect ${accountId}:`, error.message);
+          }
+        }
+      }
+    }
+  }, 60000); // Run every minute
+
+  logger.info("Watchdog monitoring started (checking every 60s)");
+}
+
+// Stop watchdog
+function stopWatchdog() {
+  if (watchdogInterval) {
+    clearInterval(watchdogInterval);
+    watchdogInterval = null;
+    logger.info("Watchdog monitoring stopped");
+  }
 }
 
 // ==================== MESSAGE QUEUE SYSTEM ====================
@@ -2294,6 +2405,7 @@ async function gracefulShutdown(signal) {
 
   // Stop monitoring
   stopHeartbeat();
+  stopWatchdog();
   if (memoryMonitorInterval) {
     clearInterval(memoryMonitorInterval);
   }
@@ -2419,6 +2531,7 @@ const server = app.listen(PORT, async () => {
   // Start monitoring systems
   startHeartbeat();
   startMemoryMonitor();
+  startWatchdog();
 
   // Auto-restore connected clients
   await restoreConnectedClients();

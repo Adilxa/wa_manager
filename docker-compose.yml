@@ -53,25 +53,33 @@ services:
       NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:5001}
       API_PORT: 5001
       API_SECRET_KEY: ${API_SECRET_KEY}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}
       NODE_ENV: production
     volumes:
       - baileys_auth:/app/.baileys_auth
       - wa_logs:/app/logs
-    # ИСПРАВЛЕНО: убрали wget, используем curl
+    # Проверяем оба сервиса: Next.js frontend и WhatsApp API
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000"]
+      test: ["CMD", "sh", "-c", "curl -f http://localhost:3000 && curl -f http://localhost:5001/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 40s
+      start_period: 60s
     deploy:
       resources:
         limits:
-          cpus: '1.0'          # Уменьшили с 2.0 до 1.0
-          memory: 512M         # Уменьшили с 2G до 512M
+          cpus: '1.5'          # Увеличено для PM2 с двумя процессами
+          memory: 1G           # Увеличено для стабильности (PM2 + Next.js + API)
         reservations:
           cpus: '0.5'
-          memory: 256M
+          memory: 512M
+      # Политика перезапуска при сбое
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+        window: 120s
     # Дополнительная безопасность
     security_opt:
       - no-new-privileges:true
@@ -79,6 +87,8 @@ services:
       - ALL
     cap_add:
       - NET_BIND_SERVICE
+    # Защита от OOM killer - приоритет ниже
+    oom_score_adj: 500
 
 volumes:
   postgres_data:
