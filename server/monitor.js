@@ -1,6 +1,6 @@
 const TelegramBot = require('node-telegram-bot-api');
 const { PrismaClient } = require('@prisma/client');
-const { createClient } = require('redis');
+const Redis = require('ioredis');
 const { exec } = require('child_process');
 const util = require('util');
 
@@ -68,22 +68,21 @@ async function checkPostgres() {
 async function checkRedis() {
   let client;
   try {
-    client = createClient({
-      socket: {
-        host: REDIS_HOST,
-        port: REDIS_PORT
-      }
+    client = new Redis({
+      host: REDIS_HOST,
+      port: REDIS_PORT,
+      maxRetriesPerRequest: 1,
+      retryStrategy: () => null // Don't retry
     });
 
-    await client.connect();
     await client.ping();
-    await client.quit();
+    client.disconnect();
 
     return { status: true, message: '✅ Redis работает' };
   } catch (error) {
     log(`Redis check failed: ${error.message}`);
     if (client) {
-      try { await client.quit(); } catch (e) {}
+      try { client.disconnect(); } catch (e) {}
     }
     return { status: false, message: '❌ Redis не работает', error: error.message };
   }
