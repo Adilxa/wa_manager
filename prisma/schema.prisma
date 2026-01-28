@@ -18,29 +18,29 @@ model WhatsAppAccount {
   createdAt   DateTime      @default(now())
   updatedAt   DateTime      @updatedAt
 
-  messages    Message[]
-  contracts   Contract[]
+  messages  Message[]
+  contracts Contract[]
 
   @@index([status])
   @@map("whatsapp_accounts")
 }
 
 model Message {
-  id             String           @id @default(cuid())
-  accountId      String
-  account        WhatsAppAccount  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  id        String          @id @default(cuid())
+  accountId String
+  account   WhatsAppAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
 
-  chatId         String?
-  direction      MessageDirection?
-  message        String           @db.Text
-  to             String?
-  from           String?
-  status         MessageStatus    @default(PENDING)
-  contactName    String?
-  contactNumber  String?
+  chatId        String?
+  direction     MessageDirection?
+  message       String            @db.Text
+  to            String?
+  from          String?
+  status        MessageStatus     @default(PENDING)
+  contactName   String?
+  contactNumber String?
 
-  sentAt         DateTime         @default(now())
-  updatedAt      DateTime         @updatedAt
+  sentAt    DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([accountId])
   @@index([accountId, chatId])
@@ -75,24 +75,24 @@ enum MessageStatus {
 }
 
 model Contract {
-  id          String         @id @default(cuid())
-  accountId   String
-  account     WhatsAppAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  id        String          @id @default(cuid())
+  accountId String
+  account   WhatsAppAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
 
-  name        String
-  totalCount  Int
-  successCount Int           @default(0)
-  failureCount Int           @default(0)
-  pendingCount Int           @default(0)
+  name         String
+  totalCount   Int
+  successCount Int    @default(0)
+  failureCount Int    @default(0)
+  pendingCount Int    @default(0)
 
-  status      ContractStatus @default(PENDING)
+  status ContractStatus @default(PENDING)
 
-  createdAt   DateTime       @default(now())
-  updatedAt   DateTime       @updatedAt
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
   startedAt   DateTime?
   completedAt DateTime?
 
-  recipients  ContractRecipient[]
+  recipients ContractRecipient[]
 
   @@index([accountId])
   @@index([status])
@@ -100,23 +100,23 @@ model Contract {
 }
 
 model ContractRecipient {
-  id          String              @id @default(cuid())
-  contractId  String
-  contract    Contract            @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  id         String   @id @default(cuid())
+  contractId String
+  contract   Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
 
   phoneNumber String
-  message     String              @db.Text
-  status      RecipientStatus     @default(PENDING)
+  message     String          @db.Text
+  status      RecipientStatus @default(PENDING)
 
-  attempts    Int                 @default(0)
-  lastAttempt DateTime?
-  errorMessage String?            @db.Text
+  attempts     Int       @default(0)
+  lastAttempt  DateTime?
+  errorMessage String?   @db.Text
 
-  messageId   String?
-  sentAt      DateTime?
+  messageId String?
+  sentAt    DateTime?
 
-  createdAt   DateTime            @default(now())
-  updatedAt   DateTime            @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([contractId])
   @@index([status])
@@ -138,4 +138,19 @@ enum RecipientStatus {
   SENDING
   SUCCESS
   FAILED
+}
+
+model TelegramSubscriber {
+  id        String   @id @default(cuid())
+  chatId    String   @unique
+  username  String?
+  firstName String?
+  lastName  String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([chatId])
+  @@index([isActive])
+  @@map("telegram_subscribers")
 }

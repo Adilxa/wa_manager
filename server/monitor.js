@@ -8,13 +8,15 @@ const execPromise = util.promisify(exec);
 
 // Configuration
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '6252681855:AAHRCXOob22ZkLl-eowZXqBu0mZ7TG8ir_Y';
-const CHAT_ID = process.env.TELEGRAM_CHAT_ID || '-1002551603042'; // Извлечено из ссылки
 const CHECK_INTERVAL = 15 * 60 * 1000; // 15 минут
 const REDIS_HOST = process.env.REDIS_HOST || 'redis';
 const REDIS_PORT = process.env.REDIS_PORT || 6379;
 
-// Initialize bot
-const bot = new TelegramBot(BOT_TOKEN, { polling: false });
+// Initialize Prisma
+const prisma = new PrismaClient();
+
+// Initialize bot with polling
+const bot = new TelegramBot(BOT_TOKEN, { polling: true });
 
 // Services status tracker
 let lastStatus = {
@@ -30,7 +32,7 @@ function log(message) {
   console.log(`[${timestamp}] ${message}`);
 }
 
-// Send Telegram notification
+// Send Telegram notification to all subscribers
 async function sendNotification(message) {
   try {
     const timestamp = new Date().toLocaleString('ru-RU', {
@@ -44,10 +46,45 @@ async function sendNotification(message) {
     });
 
     const fullMessage = `Мониторинг WA Manager\n${timestamp}\n\n${message}`;
-    await bot.sendMessage(CHAT_ID, fullMessage);
-    log(`Notification sent: ${message}`);
+
+    // Get all active subscribers
+    const subscribers = await prisma.telegramSubscriber.findMany({
+      where: { isActive: true }
+    });
+
+    if (subscribers.length === 0) {
+      log('No active subscribers to send notification');
+      return;
+    }
+
+    // Send to all subscribers
+    let successCount = 0;
+    let failCount = 0;
+
+    for (const subscriber of subscribers) {
+      try {
+        await bot.sendMessage(subscriber.chatId, fullMessage);
+        successCount++;
+      } catch (error) {
+        failCount++;
+        log(`Failed to send to ${subscriber.chatId}: ${error.message}`);
+
+        // Deactivate subscriber if bot was blocked
+        if (error.response && error.response.body &&
+            (error.response.body.description.includes('blocked') ||
+             error.response.body.description.includes('not found'))) {
+          await prisma.telegramSubscriber.update({
+            where: { id: subscriber.id },
+            data: { isActive: false }
+          });
+          log(`Deactivated subscriber ${subscriber.chatId}`);
+        }
+      }
+    }
+
+    log(`Notification sent to ${successCount}/${subscribers.length} subscribers (${failCount} failed)`);
   } catch (error) {
-    log(`Failed to send notification: ${error.message}`);
+    log(`Failed to send notifications: ${error.message}`);
   }
 }
 
@@ -256,13 +293,112 @@ async function monitorServices() {
   };
 }
 
+// Bot command handlers
+bot.onText(/\/start/, async (msg) => {
+  const chatId = msg.chat.id.toString();
+  const username = msg.from.username;
+  const firstName = msg.from.first_name;
+  const lastName = msg.from.last_name;
+
+  try {
+    // Check if already subscribed
+    const existing = await prisma.telegramSubscriber.findUnique({
+      where: { chatId }
+    });
+
+    if (existing) {
+      if (!existing.isActive) {
+        // Reactivate
+        await prisma.telegramSubscriber.update({
+          where: { chatId },
+          data: { isActive: true }
+        });
+        await bot.sendMessage(chatId, '✅ Вы снова подписаны на уведомления WA Manager!');
+        log(`Reactivated subscriber: ${chatId} (${username})`);
+      } else {
+        await bot.sendMessage(chatId, 'ℹ️ Вы уже подписаны на уведомления.');
+      }
+    } else {
+      // New subscriber
+      await prisma.telegramSubscriber.create({
+        data: {
+          chatId,
+          username,
+          firstName,
+          lastName
+        }
+      });
+      await bot.sendMessage(
+        chatId,
+        '🎉 Добро пожаловать!\n\n' +
+        'Вы подписались на уведомления о статусе WA Manager.\n\n' +
+        'Доступные команды:\n' +
+        '/status - Текущий статус сервисов\n' +
+        '/stop - Отписаться от уведомлений'
+      );
+      log(`New subscriber: ${chatId} (${username})`);
+    }
+  } catch (error) {
+    log(`Error handling /start from ${chatId}: ${error.message}`);
+    await bot.sendMessage(chatId, '❌ Ошибка при подписке. Попробуйте позже.');
+  }
+});
+
+bot.onText(/\/stop/, async (msg) => {
+  const chatId = msg.chat.id.toString();
+
+  try {
+    const subscriber = await prisma.telegramSubscriber.findUnique({
+      where: { chatId }
+    });
+
+    if (subscriber && subscriber.isActive) {
+      await prisma.telegramSubscriber.update({
+        where: { chatId },
+        data: { isActive: false }
+      });
+      await bot.sendMessage(chatId, '👋 Вы отписались от уведомлений.\n\nЧтобы подписаться снова, отправьте /start');
+      log(`Subscriber unsubscribed: ${chatId}`);
+    } else {
+      await bot.sendMessage(chatId, 'ℹ️ Вы не подписаны на уведомления.');
+    }
+  } catch (error) {
+    log(`Error handling /stop from ${chatId}: ${error.message}`);
+    await bot.sendMessage(chatId, '❌ Ошибка. Попробуйте позже.');
+  }
+});
+
+bot.onText(/\/status/, async (msg) => {
+  const chatId = msg.chat.id.toString();
+
+  try {
+    await bot.sendMessage(chatId, '🔄 Проверяю статус сервисов...');
+
+    const results = {
+      postgres: await checkPostgres(),
+      redis: await checkRedis(),
+      waManager: await checkWAManager()
+    };
+
+    const statusMessage =
+      `📊 Статус сервисов:\n\n` +
+      `${results.postgres.message}\n` +
+      `${results.redis.message}\n` +
+      `${results.waManager.message}`;
+
+    await bot.sendMessage(chatId, statusMessage);
+  } catch (error) {
+    log(`Error handling /status from ${chatId}: ${error.message}`);
+    await bot.sendMessage(chatId, '❌ Ошибка при проверке статуса.');
+  }
+});
+
 // Start monitoring
 async function start() {
   log('WA Manager Monitor started');
   log(`Monitoring interval: ${CHECK_INTERVAL / 60000} minutes`);
-  log(`Telegram chat ID: ${CHAT_ID}`);
 
-  // Send startup notification
+  // Send startup notification to all subscribers
   await sendNotification('🚀 Система мониторинга WA Manager запущена');
 
   // Run first check immediately
@@ -282,12 +418,16 @@ async function start() {
 process.on('SIGTERM', async () => {
   log('Received SIGTERM, shutting down...');
   await sendNotification('🛑 Система мониторинга WA Manager остановлена');
+  await bot.stopPolling();
+  await prisma.$disconnect();
   process.exit(0);
 });
 
 process.on('SIGINT', async () => {
   log('Received SIGINT, shutting down...');
   await sendNotification('🛑 Система мониторинга WA Manager остановлена');
+  await bot.stopPolling();
+  await prisma.$disconnect();
   process.exit(0);
 });
 
