@@ -75,4 +75,5 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD curl -f http://localhost:3000 && curl -f http://localhost:5001/health || exit 1
 
 # Start with PM2 (auto-restarts processes if they crash)
-CMD ["sh", "-c", "npx prisma migrate deploy && npm run start:pm2"]
+# Skip migrations for production DB - schema already exists
+CMD ["npm", "run", "start:pm2"]
