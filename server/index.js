@@ -1738,18 +1738,27 @@ app.get("/api/accounts/:accountId/chats/:chatId", async (req, res) => {
     const { accountId, chatId } = req.params;
     const decodedChatId = decodeURIComponent(chatId);
 
+    logger.info(`🔍 Searching messages for account ${accountId}, chatId/phone: ${decodedChatId}`);
+
     // Check if chatId is a plain phone number (no @ symbol)
     // If so, search by contactNumber instead of chatId
     let messages;
     if (!decodedChatId.includes('@')) {
-      // Plain phone number - search by contactNumber
+      // Plain phone number - search by contactNumber with flexible matching
+      // Try exact match first, then partial match (ends with)
       messages = await prisma.message.findMany({
         where: {
           accountId,
-          contactNumber: decodedChatId,
+          OR: [
+            { contactNumber: decodedChatId }, // Exact match
+            { contactNumber: { endsWith: decodedChatId } }, // Ends with (for cases like 996500353529 vs 0500353529)
+            { chatId: { contains: decodedChatId } }, // Also search in chatId
+          ],
         },
         orderBy: { sentAt: "asc" },
       });
+
+      logger.info(`📊 Found ${messages.length} messages for phone ${decodedChatId}`);
     } else {
       // Full chatId (with @) - search by chatId
       messages = await prisma.message.findMany({
@@ -1759,6 +1768,8 @@ app.get("/api/accounts/:accountId/chats/:chatId", async (req, res) => {
         },
         orderBy: { sentAt: "asc" },
       });
+
+      logger.info(`📊 Found ${messages.length} messages for chatId ${decodedChatId}`);
     }
 
     res.json(messages);
