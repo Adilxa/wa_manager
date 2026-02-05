@@ -1206,6 +1206,79 @@ app.get("/api/accounts/:id", async (req, res) => {
   }
 });
 
+// Get account status with detailed connection info
+app.get("/api/accounts/:id/status", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const account = await prisma.whatsAppAccount.findUnique({
+      where: { id },
+    });
+
+    if (!account) {
+      return res.status(404).json({ error: "Account not found" });
+    }
+
+    const clientInfo = clients.get(id);
+    const queue = messageQueues.get(id) || [];
+    const counter = messageCounters.get(id);
+    const limitsInfo = dailyLimits.get(id);
+    const dailyCheck = await checkDailyLimit(id);
+
+    const status = {
+      accountId: id,
+      name: account.name,
+      phoneNumber: account.phoneNumber,
+
+      // Connection status
+      status: clientInfo?.status || account.status,
+      hasActiveClient: !!clientInfo,
+      isConnecting: connectingAccounts.has(id),
+      reconnectAttempts: reconnectAttempts.get(id) || 0,
+
+      // Health metrics
+      lastHeartbeat: clientInfo?.lastHeartbeat
+        ? new Date(clientInfo.lastHeartbeat).toISOString()
+        : null,
+      latency: clientInfo?.latency || null,
+      lastActivity: clientInfo?.lastActivity
+        ? new Date(clientInfo.lastActivity).toISOString()
+        : null,
+
+      // Queue status
+      queue: {
+        length: queue.length,
+        isResting: counter?.isResting || false,
+        messagesSinceRest: counter?.count || 0,
+        restThreshold: CONFIG.REST_AFTER_MESSAGES,
+      },
+
+      // Limits
+      limits: {
+        enabled: account.useLimits,
+        dailyCount: limitsInfo?.messageCount || 0,
+        dailyLimit: dailyCheck.isNewAccount
+          ? CONFIG.DAILY_MESSAGE_LIMIT_NEW_ACCOUNT
+          : CONFIG.DAILY_MESSAGE_LIMIT_OLD_ACCOUNT,
+        isNewAccount: dailyCheck.isNewAccount || false,
+        rateLimit: {
+          maxPerMinute: CONFIG.RATE_LIMIT_MAX_MESSAGES,
+          window: CONFIG.RATE_LIMIT_WINDOW,
+        },
+      },
+
+      // Timestamps
+      createdAt: account.createdAt,
+      updatedAt: account.updatedAt,
+    };
+
+    res.json(status);
+  } catch (error) {
+    logger.error("Failed to get account status:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Update account
 app.put("/api/accounts/:id", async (req, res) => {
   try {
@@ -1659,19 +1732,34 @@ app.get("/api/accounts/:id/chats", async (req, res) => {
   }
 });
 
-// Get messages for a specific chat
+// Get messages for a specific chat (by chatId OR phone number)
 app.get("/api/accounts/:accountId/chats/:chatId", async (req, res) => {
   try {
     const { accountId, chatId } = req.params;
     const decodedChatId = decodeURIComponent(chatId);
 
-    const messages = await prisma.message.findMany({
-      where: {
-        accountId,
-        chatId: decodedChatId,
-      },
-      orderBy: { sentAt: "asc" },
-    });
+    // Check if chatId is a plain phone number (no @ symbol)
+    // If so, search by contactNumber instead of chatId
+    let messages;
+    if (!decodedChatId.includes('@')) {
+      // Plain phone number - search by contactNumber
+      messages = await prisma.message.findMany({
+        where: {
+          accountId,
+          contactNumber: decodedChatId,
+        },
+        orderBy: { sentAt: "asc" },
+      });
+    } else {
+      // Full chatId (with @) - search by chatId
+      messages = await prisma.message.findMany({
+        where: {
+          accountId,
+          chatId: decodedChatId,
+        },
+        orderBy: { sentAt: "asc" },
+      });
+    }
 
     res.json(messages);
   } catch (error) {
