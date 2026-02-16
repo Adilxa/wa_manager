@@ -185,13 +185,25 @@ function getLidCacheKey(groupId, lidJid) {
 async function resolveLidToPhone(sock, groupId, lidJid) {
   if (!sock || !groupId || !lidJid) return null;
 
+  // Check if Redis is connected
+  const redisStatus = redisConnection?.status;
+  const useRedis = redisStatus === "ready";
+  const cacheKey = getLidCacheKey(groupId, lidJid);
+
   try {
-    // Check Redis cache first
-    const cacheKey = getLidCacheKey(groupId, lidJid);
-    const cached = await redisConnection.get(cacheKey);
-    if (cached) {
-      logger.debug(`Redis cache hit for lid ${lidJid}: ${cached}`);
-      return cached;
+    // Check Redis cache first (if available)
+    if (useRedis) {
+      try {
+        const cached = await redisConnection.get(cacheKey);
+        if (cached) {
+          logger.debug(`Redis cache hit for lid ${lidJid}: ${cached}`);
+          return cached;
+        }
+      } catch (redisError) {
+        logger.warn(`Redis get error: ${redisError.message}, continuing without cache`);
+      }
+    } else {
+      logger.debug(`Redis not ready (status: ${redisStatus}), fetching group metadata directly`);
     }
 
     // Fetch group metadata to get participants
@@ -203,46 +215,36 @@ async function resolveLidToPhone(sock, groupId, lidJid) {
       return null;
     }
 
-    // Build mapping from participant data and cache in Redis
+    // Build mapping from participant data
     // Baileys returns participants with their real JID (@s.whatsapp.net)
-    const pipeline = redisConnection.pipeline();
     let resolvedPhone = null;
 
     for (const participant of groupMetadata.participants) {
       const participantJid = participant.id;
       const phoneNumber = extractPhoneNumber(participantJid);
 
-      if (phoneNumber) {
-        // Cache the mapping: participantJid -> phoneNumber with TTL
-        const jidKey = getLidCacheKey(groupId, participantJid);
-        pipeline.setex(jidKey, LID_CACHE_TTL, phoneNumber);
-
-        // Also cache by lid if available in participant data
-        if (participant.lid) {
-          const lidKey = getLidCacheKey(groupId, participant.lid);
-          pipeline.setex(lidKey, LID_CACHE_TTL, phoneNumber);
-          logger.debug(`Caching lid mapping in Redis: ${participant.lid} -> ${phoneNumber}`);
-
-          // Check if this is the lid we're looking for
-          if (participant.lid === lidJid) {
-            resolvedPhone = phoneNumber;
-          }
+      if (phoneNumber && participant.lid) {
+        // Check if this is the lid we're looking for
+        if (participant.lid === lidJid) {
+          resolvedPhone = phoneNumber;
+          logger.debug(`Found lid mapping: ${participant.lid} -> ${phoneNumber}`);
+          break;
         }
       }
     }
 
-    // Execute all Redis commands at once
-    await pipeline.exec();
+    // Cache in Redis if available and we found a result
+    if (useRedis && resolvedPhone) {
+      try {
+        await redisConnection.setex(cacheKey, LID_CACHE_TTL, resolvedPhone);
+        logger.debug(`Cached lid mapping in Redis: ${lidJid} -> ${resolvedPhone}`);
+      } catch (redisError) {
+        logger.warn(`Redis set error: ${redisError.message}`);
+      }
+    }
 
     if (resolvedPhone) {
       return resolvedPhone;
-    }
-
-    // If lid not directly found in participants, check cache again
-    // (in case it was cached by participantJid)
-    const recheckCached = await redisConnection.get(cacheKey);
-    if (recheckCached) {
-      return recheckCached;
     }
 
     logger.debug(`Lid ${lidJid} not found in group metadata participants`);
@@ -1177,11 +1179,16 @@ async function initializeClient(accountId) {
             // If sender is a lid (linked device id), try to resolve to phone number
             if (!contactNumber && isGroup && isLidJid(senderJid)) {
               logger.info(`Sender ${senderJid} is a lid, attempting to resolve to phone number...`);
-              contactNumber = await resolveLidToPhone(sock, chatId, senderJid);
-              if (contactNumber) {
-                logger.info(`Resolved lid ${senderJid} to phone: ${contactNumber}`);
-              } else {
-                logger.info(`Could not resolve lid ${senderJid} to phone number`);
+              try {
+                contactNumber = await resolveLidToPhone(sock, chatId, senderJid);
+                if (contactNumber) {
+                  logger.info(`Resolved lid ${senderJid} to phone: ${contactNumber}`);
+                } else {
+                  logger.info(`Could not resolve lid ${senderJid} to phone number`);
+                }
+              } catch (resolveError) {
+                logger.error(`Error resolving lid to phone: ${resolveError.message}`);
+                // Continue without resolved phone number
               }
             }
 

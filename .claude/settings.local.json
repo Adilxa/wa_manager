@@ -15,7 +15,8 @@
       "Bash(findstr:*)",
       "Bash(dir:*)",
       "Bash(npm run dev:server:*)",
-      "Bash(pkill:*)"
+      "Bash(pkill:*)",
+      "Bash(redis-cli:*)"
     ],
     "deny": [],
     "ask": []
