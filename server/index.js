@@ -1686,12 +1686,20 @@ app.get("/api/accounts/:id/chats", async (req, res) => {
       orderBy: { sentAt: "desc" },
     });
 
-    // Group messages by contactNumber (for direct chats) or chatId (for groups)
+    // First pass: build a map of contactName -> contactNumber from direct chats
+    const nameToNumberMap = new Map();
+    messages.forEach(msg => {
+      if (!isGroupChat(msg.chatId) && msg.contactNumber && msg.contactName) {
+        nameToNumberMap.set(msg.contactName, msg.contactNumber);
+      }
+    });
+
+    // Group messages by sender
     const chatsMap = new Map();
 
     messages.forEach(msg => {
       const isGroup = isGroupChat(msg.chatId);
-      const contactNumber = msg.contactNumber || extractPhoneNumber(msg.chatId);
+      let contactNumber = msg.contactNumber || extractPhoneNumber(msg.chatId);
 
       // Skip messages from channels/newsletters (not groups, not direct chats)
       if (!isGroup && !contactNumber) {
@@ -1699,15 +1707,21 @@ app.get("/api/accounts/:id/chats", async (req, res) => {
         return;
       }
 
-      // For groups use chatId as key, for direct chats use contactNumber
-      const key = isGroup ? msg.chatId : contactNumber;
+      // For group messages: try to find phone number by contactName from direct chats
+      if (isGroup && !contactNumber && msg.contactName) {
+        contactNumber = nameToNumberMap.get(msg.contactName) || null;
+      }
 
-      if (!chatsMap.has(key)) {
-        chatsMap.set(key, {
-          chatId: msg.chatId,
-          contactNumber: isGroup ? null : contactNumber,
-          contactName: isGroup ? (msg.chatId.split("@")[0]) : msg.contactName,
-          isGroup: isGroup,
+      // Use contactNumber as key if available, otherwise use contactName or from
+      const senderKey = contactNumber || msg.contactName || msg.from;
+
+      if (!chatsMap.has(senderKey)) {
+        chatsMap.set(senderKey, {
+          chatId: contactNumber ? `${contactNumber}@s.whatsapp.net` : msg.from,
+          contactNumber: contactNumber,
+          contactName: msg.contactName,
+          isGroup: false,
+          groupSource: isGroup ? msg.chatId : null,
           messages: [],
           unreadCount: 0,
           lastMessageTime: msg.sentAt,
