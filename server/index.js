@@ -1686,26 +1686,28 @@ app.get("/api/accounts/:id/chats", async (req, res) => {
       orderBy: { sentAt: "desc" },
     });
 
-    // Group messages by contactNumber or chatId
+    // Group messages by contactNumber (for direct chats) or chatId (for groups)
     const chatsMap = new Map();
 
     messages.forEach(msg => {
-      // Extract phone number properly - skip non-user chats
+      const isGroup = isGroupChat(msg.chatId);
       const contactNumber = msg.contactNumber || extractPhoneNumber(msg.chatId);
 
-      // Skip messages from channels/newsletters if contactNumber is null
-      if (!contactNumber) {
+      // Skip messages from channels/newsletters (not groups, not direct chats)
+      if (!isGroup && !contactNumber) {
         logger.debug(`Skipping non-user chat in list: ${msg.chatId}`);
         return;
       }
 
-      const key = contactNumber;
+      // For groups use chatId as key, for direct chats use contactNumber
+      const key = isGroup ? msg.chatId : contactNumber;
 
       if (!chatsMap.has(key)) {
         chatsMap.set(key, {
           chatId: msg.chatId,
-          contactNumber: contactNumber,
-          contactName: msg.contactName,
+          contactNumber: isGroup ? null : contactNumber,
+          contactName: isGroup ? (msg.chatId.split("@")[0]) : msg.contactName,
+          isGroup: isGroup,
           messages: [],
           unreadCount: 0,
           lastMessageTime: msg.sentAt,
