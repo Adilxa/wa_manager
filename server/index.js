@@ -1728,7 +1728,7 @@ app.get("/api/accounts/:id/chats", async (req, res) => {
         });
       }
 
-      const chat = chatsMap.get(key);
+      const chat = chatsMap.get(senderKey);
       chat.messages.push(msg);
 
       // Update last message time if newer
