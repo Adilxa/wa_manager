@@ -1177,20 +1177,20 @@ async function initializeClient(accountId) {
             let contactNumber = extractPhoneNumber(senderJid);
 
             // If sender is a lid (linked device id), try to resolve to phone number
-            if (!contactNumber && isGroup && isLidJid(senderJid)) {
-              logger.info(`Sender ${senderJid} is a lid, attempting to resolve to phone number...`);
-              try {
-                contactNumber = await resolveLidToPhone(sock, chatId, senderJid);
-                if (contactNumber) {
-                  logger.info(`Resolved lid ${senderJid} to phone: ${contactNumber}`);
-                } else {
-                  logger.info(`Could not resolve lid ${senderJid} to phone number`);
-                }
-              } catch (resolveError) {
-                logger.error(`Error resolving lid to phone: ${resolveError.message}`);
-                // Continue without resolved phone number
-              }
-            }
+            // TEMPORARILY DISABLED - causing issues, will fix later
+            // if (!contactNumber && isGroup && isLidJid(senderJid)) {
+            //   logger.info(`Sender ${senderJid} is a lid, attempting to resolve to phone number...`);
+            //   try {
+            //     contactNumber = await resolveLidToPhone(sock, chatId, senderJid);
+            //     if (contactNumber) {
+            //       logger.info(`Resolved lid ${senderJid} to phone: ${contactNumber}`);
+            //     } else {
+            //       logger.info(`Could not resolve lid ${senderJid} to phone number`);
+            //     }
+            //   } catch (resolveError) {
+            //     logger.error(`Error resolving lid to phone: ${resolveError.message}`);
+            //   }
+            // }
 
             logger.info(`Extracted: senderJid=${senderJid}, contactNumber=${contactNumber}, isGroup=${isGroup}`);
             logger.info(`===================================\n`);
