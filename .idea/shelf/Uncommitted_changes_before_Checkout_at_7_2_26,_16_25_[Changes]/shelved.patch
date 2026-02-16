@@ -1,0 +1,20 @@
+Index: .claude/settings.local.json
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+>{\n  \"permissions\": {\n    \"allow\": [\n      \"Bash(.env.example)\",\n      \"Bash(git commit:*)\",\n      \"Bash(git push:*)\",\n      \"Bash(git add:*)\",\n      \"Bash(find:*)\",\n      \"Bash(npx prisma migrate:*)\",\n      \"Bash(npx prisma db push)\",\n      \"Bash(node --check:*)\",\n      \"Bash(curl:*)\",\n      \"Bash(node --version)\",\n      \"Bash(dir /s /b \\\"C:\\\\Users\\\\boss-\\\\OneDrive\\\\Рабочий стол\\\\Active Projects\\\\OCTO\\\\wa\\\\wa_manager\\\")\",\n      \"Bash(findstr:*)\",\n      \"Bash(dir:*)\",\n      \"Bash(npm run dev:server:*)\",\n      \"Bash(pkill:*)\"\n    ],\n    \"deny\": [],\n    \"ask\": []\n  }\n}\n
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/.claude/settings.local.json b/.claude/settings.local.json
+--- a/.claude/settings.local.json	(revision a436f90fc0d6364ff50705a19943765afbfae464)
++++ b/.claude/settings.local.json	(date 1770300049912)
+@@ -15,7 +15,8 @@
+       "Bash(findstr:*)",
+       "Bash(dir:*)",
+       "Bash(npm run dev:server:*)",
+-      "Bash(pkill:*)"
++      "Bash(pkill:*)",
++      "Bash(ssh root@aktaevaktan5 \"cd /var/www/wa_manager && docker-compose exec -T postgres psql -U postgres -d wa_manager -c \"\"SELECT DISTINCT contactNumber, chatId FROM \\\\\"\"Message\\\\\"\" WHERE accountId = ''cml9h1m7s000wo4ebuksfjyzh'' LIMIT 10;\"\"\")"
+     ],
+     "deny": [],
+     "ask": []
