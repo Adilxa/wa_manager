@@ -138,17 +138,31 @@ function getSessionPath(accountId) {
 }
 
 // Helper function to extract phone number from WhatsApp JID
-// Returns phone number only for regular users (@s.whatsapp.net)
+// Returns phone number for regular users (@s.whatsapp.net)
 // Returns null for newsletters/channels (@lid, @broadcast, etc)
 function extractPhoneNumber(jid) {
   if (!jid) return null;
 
-  // Only extract number for regular WhatsApp users
+  // Extract number for regular WhatsApp users
   if (jid.includes("@s.whatsapp.net")) {
     return jid.split("@")[0];
   }
 
   // For other types (lid, broadcast, newsletter), return null
+  return null;
+}
+
+// Helper function to check if JID is a group chat
+function isGroupChat(jid) {
+  return jid && jid.includes("@g.us");
+}
+
+// Helper function to extract group ID from JID
+function extractGroupId(jid) {
+  if (!jid) return null;
+  if (jid.includes("@g.us")) {
+    return jid.split("@")[0];
+  }
   return null;
 }
 
@@ -1039,16 +1053,20 @@ async function initializeClient(accountId) {
             logger.info(`msg.pushName: ${msg.pushName || "none"}`);
             logger.info(`msg.verifiedBizName: ${msg.verifiedBizName || "none"}`);
 
-            // For group/channel messages, participant contains the real sender
+            // Check if this is a group chat
+            const isGroup = isGroupChat(chatId);
+
+            // For group messages, participant contains the real sender
             // For direct messages, remoteJid is the contact
             const senderJid = msg.key.participant || chatId;
             const contactNumber = extractPhoneNumber(senderJid);
 
-            logger.info(`Extracted: senderJid=${senderJid}, contactNumber=${contactNumber}`);
+            logger.info(`Extracted: senderJid=${senderJid}, contactNumber=${contactNumber}, isGroup=${isGroup}`);
             logger.info(`===================================\n`);
 
-            // Skip if we can't extract a valid phone number
-            if (!contactNumber) {
+            // For groups: allow messages even without contactNumber (participant might be lid)
+            // For direct chats: require valid contactNumber
+            if (!isGroup && !contactNumber) {
               logger.debug(
                 `Skipping message - no valid contact number. ChatId: ${chatId}, Participant: ${msg.key.participant || "none"}`
               );
@@ -1059,13 +1077,13 @@ async function initializeClient(accountId) {
             await prisma.message.create({
               data: {
                 accountId,
-                chatId: senderJid, // Use sender's JID as chatId for direct chats
+                chatId: isGroup ? chatId : senderJid, // Use group ID for groups, sender JID for direct chats
                 direction: isFromMe ? "OUTGOING" : "INCOMING",
                 message: messageText,
-                to: isFromMe ? contactNumber : null,
-                from: isFromMe ? null : contactNumber,
+                to: isFromMe ? (contactNumber || extractGroupId(chatId)) : null,
+                from: isFromMe ? null : (contactNumber || senderJid),
                 status: isFromMe ? "SENT" : "RECEIVED",
-                contactNumber,
+                contactNumber: contactNumber || null,
                 contactName: msg.pushName || null,
               },
             });

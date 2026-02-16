@@ -57,9 +57,14 @@ services:
     volumes:
       - baileys_auth:/app/.baileys_auth
       - wa_logs:/app/logs
-    # Health check - проверяем оба сервиса
     healthcheck:
-      test: ["CMD", "sh", "-c", "curl -f http://localhost:3000 && curl -f http://localhost:5001/health"]
+      test:
+        [
+          "CMD",
+          "sh",
+          "-c",
+          "curl -f http://localhost:3000 && curl -f http://localhost:5001/health",
+        ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -67,10 +72,10 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '1.0'
+          cpus: "1.0"
           memory: 512M
         reservations:
-          cpus: '0.5'
+          cpus: "0.5"
           memory: 256M
       # Политика перезапуска при сбое
       restart_policy:
