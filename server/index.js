@@ -215,6 +215,20 @@ async function resolveLidToPhone(sock, groupId, lidJid) {
       return null;
     }
 
+    // Log first few participants to debug structure
+    logger.info(`Group ${groupId} has ${groupMetadata.participants.length} participants`);
+    if (groupMetadata.participants.length > 0) {
+      const sample = groupMetadata.participants.slice(0, 3).map(p => ({
+        id: p.id,
+        lid: p.lid || 'NO_LID',
+        admin: p.admin
+      }));
+      logger.info(`Sample participants: ${JSON.stringify(sample)}`);
+    }
+
+    // Extract lid number without @lid suffix for comparison
+    const lidNumber = lidJid.replace('@lid', '');
+
     // Build mapping from participant data
     // Baileys returns participants with their real JID (@s.whatsapp.net)
     let resolvedPhone = null;
@@ -223,11 +237,14 @@ async function resolveLidToPhone(sock, groupId, lidJid) {
       const participantJid = participant.id;
       const phoneNumber = extractPhoneNumber(participantJid);
 
-      if (phoneNumber && participant.lid) {
-        // Check if this is the lid we're looking for
-        if (participant.lid === lidJid) {
+      if (phoneNumber) {
+        // Check multiple lid formats
+        const participantLid = participant.lid;
+        const participantLidNumber = participantLid ? participantLid.replace('@lid', '') : null;
+
+        if (participantLid === lidJid || participantLidNumber === lidNumber) {
           resolvedPhone = phoneNumber;
-          logger.debug(`Found lid mapping: ${participant.lid} -> ${phoneNumber}`);
+          logger.info(`Found lid mapping: ${lidJid} -> ${phoneNumber}`);
           break;
         }
       }
