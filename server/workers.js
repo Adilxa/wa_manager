@@ -234,14 +234,19 @@ function startMessageWorker() {
           data: { status: "SENDING" },
         });
 
-        // Clean phone number - extract only digits (remove @lid, @s.whatsapp.net, etc)
+        // Format JID for WhatsApp
+        // Support: @lid (group participants), @s.whatsapp.net (regular users), @g.us (groups)
+        let jid;
         let cleanPhone = phoneNumber;
-        if (phoneNumber.includes("@")) {
+        if (phoneNumber.includes("@lid") || phoneNumber.includes("@s.whatsapp.net") || phoneNumber.includes("@g.us")) {
+          // Already formatted - use as is
+          jid = phoneNumber;
           cleanPhone = phoneNumber.split("@")[0];
+        } else {
+          // Clean phone number and format as regular user
+          cleanPhone = phoneNumber.replace(/[^0-9]/g, '');
+          jid = `${cleanPhone}@s.whatsapp.net`;
         }
-
-        // Format JID for WhatsApp - always use @s.whatsapp.net for regular users
-        const jid = `${cleanPhone}@s.whatsapp.net`;
 
         logger.info(`📤 Sending to ${cleanPhone} (Contract: ${contractId})`);
 

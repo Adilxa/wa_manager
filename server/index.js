@@ -827,17 +827,22 @@ async function processMessageQueue(accountId) {
   const msg = queue[0];
 
   try {
-    // Clean phone number - extract only digits (remove @lid, @s.whatsapp.net, etc)
-    let cleanPhone = msg.to;
-    if (msg.to.includes("@")) {
+    // Format JID for WhatsApp
+    // Support: @lid (group participants), @s.whatsapp.net (regular users), @g.us (groups)
+    let jid;
+    let cleanPhone;
+    if (msg.to.includes("@lid") || msg.to.includes("@s.whatsapp.net") || msg.to.includes("@g.us")) {
+      // Already formatted - use as is
+      jid = msg.to;
       cleanPhone = msg.to.split("@")[0];
+    } else {
+      // Clean phone number and format as regular user
+      cleanPhone = msg.to.replace(/[^0-9]/g, '');
+      jid = `${cleanPhone}@s.whatsapp.net`;
     }
 
-    // Format JID for WhatsApp - always use @s.whatsapp.net for regular users
-    const jid = `${cleanPhone}@s.whatsapp.net`;
-
     logger.info(
-      `📤 Processing message for ${accountId} to ${cleanPhone} (${queue.length} in queue)`
+      `📤 Processing message for ${accountId} to ${jid} (${queue.length} in queue)`
     );
 
     // Send message with human-like behavior
