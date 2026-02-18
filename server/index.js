@@ -1089,15 +1089,17 @@ async function initializeClient(accountId) {
         ),
       },
       markOnlineOnConnect: false,
-      generateHighQualityLinkPreview: true,
+      generateHighQualityLinkPreview: false, // Disable for better performance
       syncFullHistory: false,
       browser: ["OCTO WhatsApp Manager", "Chrome", "120.0.0"],
-      // Connection settings for stability
-      connectTimeoutMs: 60000,
-      defaultQueryTimeoutMs: 60000,
-      keepAliveIntervalMs: 25000, // Send keep-alive every 25 seconds
-      retryRequestDelayMs: 500,
-      qrTimeout: 60000,
+      // Connection settings for stability - optimized timeouts
+      connectTimeoutMs: 30000, // 30s connection timeout
+      defaultQueryTimeoutMs: 30000, // 30s query timeout
+      keepAliveIntervalMs: 20000, // Send keep-alive every 20 seconds
+      retryRequestDelayMs: 250, // Faster retries
+      qrTimeout: 45000, // 45s QR timeout
+      emitOwnEvents: false, // Don't emit own events (reduces memory)
+      fireInitQueries: false, // Don't fire init queries (faster startup)
       // Message retry settings
       getMessage: async key => {
         // Return empty for now, can be enhanced to fetch from DB
@@ -2727,13 +2729,43 @@ async function gracefulShutdown(signal) {
 process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
 process.on("SIGINT", () => gracefulShutdown("SIGINT"));
 
-// Handle uncaught exceptions
+// Handle uncaught exceptions - with special handling for Baileys errors
 process.on("uncaughtException", error => {
+  const errorMsg = error.message || error.toString();
+  const errorCode = error.code;
+
+  // Handle common network errors from Baileys
+  if (errorCode === 'ETIMEDOUT' || errorCode === 'EPIPE' || errorCode === 'ECONNRESET' ||
+      errorCode === 'ENOTFOUND' || errorCode === 'ECONNREFUSED' ||
+      errorMsg.includes('write EPIPE') || errorMsg.includes('ETIMEDOUT')) {
+    logger.warn(`Network error (${errorCode}): ${errorMsg} - continuing...`);
+    // These are recoverable network errors, don't crash
+    return;
+  }
+
+  // Handle Baileys specific errors
+  if (errorMsg.includes('Boom') || errorMsg.includes('DisconnectReason') ||
+      errorMsg.includes('Connection Closed') || errorMsg.includes('timed out')) {
+    logger.warn(`Baileys connection error: ${errorMsg} - continuing...`);
+    return;
+  }
+
   logger.error("Uncaught exception:", error);
   // Don't exit, try to recover
 });
 
 process.on("unhandledRejection", (reason, promise) => {
+  const errorMsg = reason?.message || reason?.toString() || 'Unknown';
+  const errorCode = reason?.code;
+
+  // Handle common network errors
+  if (errorCode === 'ETIMEDOUT' || errorCode === 'EPIPE' || errorCode === 'ECONNRESET' ||
+      errorMsg.includes('write EPIPE') || errorMsg.includes('ETIMEDOUT') ||
+      errorMsg.includes('timed out') || errorMsg.includes('Connection Closed')) {
+    logger.warn(`Unhandled network rejection (${errorCode}): ${errorMsg} - continuing...`);
+    return;
+  }
+
   logger.error("Unhandled rejection:", reason);
   // Don't exit, try to recover
 });
@@ -2816,4 +2848,10 @@ const server = app.listen(PORT, async () => {
 
   logger.info("Ready to accept connections");
   logger.info(`Health check: http://localhost:${PORT}/health`);
+
+  // Signal to PM2 that we're ready
+  if (process.send) {
+    process.send('ready');
+    logger.info("Sent ready signal to PM2");
+  }
 });
