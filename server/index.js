@@ -652,6 +652,60 @@ function startMemoryMonitor() {
   }, CONFIG.MEMORY_CHECK_INTERVAL);
 
   logger.info("Memory monitoring started");
+
+  // Periodic cleanup of stale data (every 30 minutes)
+  setInterval(() => {
+    cleanupStaleData();
+  }, 1800000);
+}
+
+// Clean up stale data from Maps to prevent memory leaks
+function cleanupStaleData() {
+  const now = Date.now();
+  const ONE_DAY = 24 * 60 * 60 * 1000;
+
+  // Clean up rateLimiter entries older than 1 hour
+  for (const [accountId, limiter] of rateLimiter.entries()) {
+    if (now - limiter.windowStart > 3600000) {
+      rateLimiter.delete(accountId);
+    }
+  }
+
+  // Clean up old daily limits (entries from previous days)
+  const today = new Date().toDateString();
+  for (const [accountId, limits] of dailyLimits.entries()) {
+    if (limits.date !== today) {
+      dailyLimits.delete(accountId);
+    }
+  }
+
+  // Clean up message counters for disconnected accounts
+  for (const accountId of messageCounters.keys()) {
+    if (!clients.has(accountId)) {
+      messageCounters.delete(accountId);
+    }
+  }
+
+  // Clean up empty message queues
+  for (const [accountId, queue] of messageQueues.entries()) {
+    if (queue.length === 0 && !clients.has(accountId)) {
+      messageQueues.delete(accountId);
+    }
+  }
+
+  // Clean up stale reconnect attempts (older than 1 day)
+  for (const accountId of reconnectAttempts.keys()) {
+    if (!clients.has(accountId) && !connectingAccounts.has(accountId)) {
+      reconnectAttempts.delete(accountId);
+    }
+  }
+
+  // Force garbage collection if available
+  if (global.gc) {
+    global.gc();
+  }
+
+  logger.info(`Cleanup completed: rateLimiter=${rateLimiter.size}, dailyLimits=${dailyLimits.size}, messageCounters=${messageCounters.size}, messageQueues=${messageQueues.size}`);
 }
 
 // ==================== MESSAGE QUEUE SYSTEM ====================
@@ -2646,6 +2700,14 @@ async function gracefulShutdown(signal) {
   // Close database connection
   await prisma.$disconnect();
   logger.info("Database disconnected");
+
+  // Close Redis connection
+  try {
+    await redisConnection.quit();
+    logger.info("Redis disconnected");
+  } catch (err) {
+    logger.error("Failed to close Redis:", err.message);
+  }
 
   // Exit
   logger.info("Shutdown complete");

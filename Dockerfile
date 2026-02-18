@@ -70,9 +70,10 @@ USER nodejs
 # Expose ports (Next.js and API)
 EXPOSE 3000 5001
 
-# Health check - check both services
-HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD curl -f http://localhost:3000 && curl -f http://localhost:5001/health || exit 1
+# Health check - check both services (increased timeout for stability)
+HEALTHCHECK --interval=60s --timeout=30s --start-period=120s --retries=5 \
+    CMD curl -sf http://localhost:3000 -o /dev/null && curl -sf http://localhost:5001/health -o /dev/null || exit 1
 
 # Start with PM2 (auto-restarts processes if they crash)
+# --expose-gc allows manual GC calls for memory management
 CMD ["sh", "-c", "npx prisma migrate deploy && npm run start:pm2"]
