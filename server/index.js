@@ -1531,6 +1531,15 @@ app.put("/api/accounts/:id", async (req, res) => {
 app.post("/api/accounts/:id/connect", async (req, res) => {
   const accountId = req.params.id;
   try {
+    // FAST CHECK: Verify account exists in DB first (prevents heavy operations for non-existent accounts)
+    const accountExists = await prisma.whatsAppAccount.findUnique({
+      where: { id: accountId },
+      select: { id: true }
+    });
+    if (!accountExists) {
+      return res.status(404).json({ error: "Account not found" });
+    }
+
     // Check if already connecting
     if (connectingAccounts.has(accountId)) {
       return res
