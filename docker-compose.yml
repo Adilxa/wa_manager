@@ -22,9 +22,15 @@ services:
     restart: unless-stopped
     volumes:
       - redis_data:/data
-    command: redis-server --appendonly yes --appendfsync everysec
+    command: >
+      redis-server
+      --appendonly yes
+      --appendfsync everysec
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+      --requirepass ${REDIS_PASSWORD:-}
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-}", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -44,8 +50,9 @@ services:
       - "3000:3000"
       - "5001:5001"
     environment:
-      DATABASE_URL: ${DATABASE_URL}
-      DIRECT_URL: ${DIRECT_URL}
+      # Prisma connection pool: 10 connections (reduced to save memory)
+      DATABASE_URL: ${DATABASE_URL:-postgresql://postgres:postgres@postgres:5432/wa_manager?schema=public&connection_limit=10&pool_timeout=10&connect_timeout=30}
+      DIRECT_URL: ${DIRECT_URL:-postgresql://postgres:postgres@postgres:5432/wa_manager?schema=public}
       REDIS_HOST: redis
       REDIS_PORT: 6379
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
@@ -56,21 +63,30 @@ services:
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}
       NODE_ENV: production
+      # Enable Node.js optimizations
+      UV_THREADPOOL_SIZE: 4
     volumes:
       - baileys_auth:/app/.baileys_auth
       - wa_logs:/app/logs
-    # Проверяем оба сервиса: Next.js frontend и WhatsApp API
+    # Graceful shutdown timeout (45 seconds)
+    stop_grace_period: 45s
     healthcheck:
-      test: ["CMD", "sh", "-c", "curl -f http://localhost:3000 && curl -f http://localhost:5001/health"]
+      test: ["CMD", "sh", "-c", "curl -sf http://localhost:3000 -o /dev/null && curl -sf http://localhost:5001/health -o /dev/null"]
       interval: 30s
-      timeout: 10s
+      timeout: 15s
       retries: 3
-      start_period: 60s
+      start_period: 90s
+    # Log rotation to prevent disk fill
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
     deploy:
       resources:
         limits:
-          cpus: '1.5'          # Увеличено для PM2 с двумя процессами
-          memory: 1G           # Увеличено для стабильности (PM2 + Next.js + API)
+          cpus: '2.0'
+          memory: 1G
         reservations:
           cpus: '0.5'
           memory: 512M
@@ -78,7 +94,7 @@ services:
       restart_policy:
         condition: on-failure
         delay: 5s
-        max_attempts: 3
+        max_attempts: 20
         window: 120s
     # Дополнительная безопасность
     security_opt:

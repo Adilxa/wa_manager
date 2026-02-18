@@ -2,7 +2,10 @@ const { Worker } = require("bullmq");
 const { PrismaClient } = require("@prisma/client");
 const { contractQueue, messageQueue, redisConnection } = require("./queue");
 
-const prisma = new PrismaClient();
+// Single Prisma instance with optimized settings
+const prisma = new PrismaClient({
+  log: ['error'],
+});
 
 // Shared state (you'll pass this from server/index.js)
 let clients = null;
@@ -131,12 +134,17 @@ function startContractWorker() {
           messagesQueued: jobs.length,
         };
       } catch (error) {
-        logger.error(`❌ Contract worker error:`, error);
+        const errorMsg = error.message || 'Unknown error';
+        logger.error(`❌ Contract worker error: ${errorMsg}`);
 
-        await prisma.contract.update({
-          where: { id: contractId },
-          data: { status: "FAILED" },
-        });
+        try {
+          await prisma.contract.update({
+            where: { id: contractId },
+            data: { status: "FAILED" },
+          });
+        } catch (dbError) {
+          logger.error(`Failed to update contract status: ${dbError.message}`);
+        }
 
         throw error;
       }
@@ -291,22 +299,21 @@ function startMessageWorker() {
 
         logger.info(`✅ SUCCESS: ${phoneNumber}`);
 
-        // Check if contract is completed
-        const updatedContract = await prisma.contract.findUnique({
-          where: { id: contractId },
-          include: {
-            _count: {
-              select: {
-                recipients: {
-                  where: { status: { in: ["PENDING", "QUEUED", "SENDING"] } },
-                },
-              },
-            },
-          },
+        // Check if contract is completed (use raw count for efficiency)
+        const pendingCount = await prisma.contractRecipient.count({
+          where: {
+            contractId,
+            status: { in: ["PENDING", "QUEUED", "SENDING"] }
+          }
         });
 
-        if (updatedContract._count.recipients === 0) {
-          // Contract completed
+        if (pendingCount === 0) {
+          // Contract completed - get final stats
+          const contract = await prisma.contract.findUnique({
+            where: { id: contractId },
+            select: { successCount: true, failureCount: true }
+          });
+
           await prisma.contract.update({
             where: { id: contractId },
             data: {
@@ -316,14 +323,16 @@ function startMessageWorker() {
           });
 
           logger.info(`🎉 CONTRACT COMPLETED: ${contractId}`);
-          logger.info(`   ✅ Success: ${updatedContract.successCount}`);
-          logger.info(`   ❌ Failed: ${updatedContract.failureCount}`);
+          logger.info(`   ✅ Success: ${contract?.successCount || 0}`);
+          logger.info(`   ❌ Failed: ${contract?.failureCount || 0}`);
         }
 
-        // Get account to check if limits should be applied
-        const account = await prisma.whatsAppAccount.findUnique({
+        // Get account to check if limits should be applied (use cache from client)
+        const clientInfo = clients.get(accountId);
+        const account = clientInfo ? await prisma.whatsAppAccount.findUnique({
           where: { id: accountId },
-        });
+          select: { useLimits: true }
+        }) : null;
 
         // Add delay between messages if limits are enabled
         if (account && account.useLimits) {
@@ -345,25 +354,43 @@ function startMessageWorker() {
           contractId,
         };
       } catch (error) {
-        logger.error(`❌ FAILED: ${phoneNumber} - ${error.message}`);
+        const errorMsg = error.message || 'Unknown error';
+        const errorCode = error.code;
+
+        // Check if this is a recoverable network error
+        const isNetworkError = errorCode === 'ETIMEDOUT' || errorCode === 'EPIPE' ||
+          errorCode === 'ECONNRESET' || errorCode === 'ENOTFOUND' ||
+          errorMsg.includes('timed out') || errorMsg.includes('Connection Closed');
+
+        if (isNetworkError) {
+          logger.warn(`⚠️ Network error for ${phoneNumber}: ${errorMsg} - will retry`);
+          // Don't mark as failed, let BullMQ retry
+          throw error;
+        }
+
+        logger.error(`❌ FAILED: ${phoneNumber} - ${errorMsg}`);
 
         // Update recipient status to FAILED
-        await prisma.contractRecipient.update({
-          where: { id: recipientId },
-          data: {
-            status: "FAILED",
-            errorMessage: error.message,
-          },
-        });
+        try {
+          await prisma.contractRecipient.update({
+            where: { id: recipientId },
+            data: {
+              status: "FAILED",
+              errorMessage: errorMsg.substring(0, 500), // Limit error message length
+            },
+          });
 
-        // Update contract counters
-        await prisma.contract.update({
-          where: { id: contractId },
-          data: {
-            failureCount: { increment: 1 },
-            pendingCount: { decrement: 1 },
-          },
-        });
+          // Update contract counters
+          await prisma.contract.update({
+            where: { id: contractId },
+            data: {
+              failureCount: { increment: 1 },
+              pendingCount: { decrement: 1 },
+            },
+          });
+        } catch (dbError) {
+          logger.error(`Failed to update DB after message failure: ${dbError.message}`);
+        }
 
         throw error;
       }

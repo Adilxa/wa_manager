@@ -7,19 +7,20 @@ module.exports = {
       exec_mode: 'fork',
       autorestart: true,
       watch: false,
+      // Restart only on memory limit (no cron - causes kill issues)
       max_memory_restart: '500M',
       env: {
         NODE_ENV: 'production',
-        PORT: '5001'
+        API_PORT: process.env.API_PORT || 5001,
+        // Enable garbage collection
+        NODE_OPTIONS: '--expose-gc --max-old-space-size=400',
       },
-      // Auto-restart settings
-      restart_delay: 5000,
-      max_restarts: 10,
+      // Restart strategy
       min_uptime: '10s',
-      // Exponential backoff restart
+      max_restarts: 50,
+      restart_delay: 3000,
+      // Exponential backoff
       exp_backoff_restart_delay: 100,
-      // Kill timeout
-      kill_timeout: 5000,
       // Logging
       error_file: './logs/api-error.log',
       out_file: './logs/api-out.log',
@@ -27,9 +28,11 @@ module.exports = {
       merge_logs: true,
       // Auto-restart on exceptions
       ignore_watch: ['node_modules', 'logs', '.next', '.baileys_auth'],
-      // Graceful shutdown
+      // Graceful shutdown - increased timeout
+      kill_timeout: 30000,
+      wait_ready: true,
       listen_timeout: 10000,
-      shutdown_with_message: true
+      shutdown_with_message: true,
     },
     {
       name: 'nextjs-frontend',
@@ -39,19 +42,19 @@ module.exports = {
       exec_mode: 'fork',
       autorestart: true,
       watch: false,
+      // Restart only on memory limit
       max_memory_restart: '300M',
       env: {
         NODE_ENV: 'production',
-        PORT: '3000'
+        PORT: 3000,
+        NODE_OPTIONS: '--max-old-space-size=250',
       },
-      // Auto-restart settings
-      restart_delay: 5000,
-      max_restarts: 10,
+      // Restart strategy
       min_uptime: '10s',
-      // Exponential backoff restart
+      max_restarts: 50,
+      restart_delay: 3000,
+      // Exponential backoff
       exp_backoff_restart_delay: 100,
-      // Kill timeout
-      kill_timeout: 5000,
       // Logging
       error_file: './logs/frontend-error.log',
       out_file: './logs/frontend-out.log',
@@ -60,8 +63,9 @@ module.exports = {
       // Auto-restart on exceptions
       ignore_watch: ['node_modules', 'logs', '.next', '.baileys_auth'],
       // Graceful shutdown
+      kill_timeout: 30000,
       listen_timeout: 10000,
-      shutdown_with_message: true
+      shutdown_with_message: true,
     },
     {
       name: 'services-monitor',
@@ -72,24 +76,23 @@ module.exports = {
       watch: false,
       max_memory_restart: '100M',
       env: {
-        NODE_ENV: 'production'
+        NODE_ENV: 'production',
       },
       // Auto-restart settings
       restart_delay: 10000,
-      max_restarts: 10,
+      max_restarts: 50,
       min_uptime: '30s',
       // Exponential backoff restart
       exp_backoff_restart_delay: 100,
-      // Kill timeout
-      kill_timeout: 5000,
       // Logging
       error_file: './logs/monitor-error.log',
       out_file: './logs/monitor-out.log',
       log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
       merge_logs: true,
       // Graceful shutdown
+      kill_timeout: 30000,
       listen_timeout: 5000,
-      shutdown_with_message: true
-    }
-  ]
+      shutdown_with_message: true,
+    },
+  ],
 };
