@@ -30,7 +30,14 @@ services:
       --maxmemory-policy allkeys-lru
       --requirepass ${REDIS_PASSWORD:-adilhankrasavchikvoobshebomba}
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-adilhankrasavchikvoobshebomba}", "ping"]
+      test:
+        [
+          "CMD",
+          "redis-cli",
+          "-a",
+          "${REDIS_PASSWORD:-adilhankrasavchikvoobshebomba}",
+          "ping",
+        ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -107,6 +114,11 @@ services:
       - ALL
     cap_add:
       - NET_BIND_SERVICE
+    # Block malicious domains (virus protection)
+    extra_hosts:
+      - "repositorylinux.publicvm.com:127.0.0.1"
+      - "publicvm.com:127.0.0.1"
+      - "linux.publicvm.com:127.0.0.1"
 
 volumes:
   postgres_data:
