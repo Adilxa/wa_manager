@@ -8,12 +8,12 @@ module.exports = {
       autorestart: true,
       watch: false,
       // Restart only on memory limit (no cron - causes kill issues)
-      max_memory_restart: '1200M',
+      max_memory_restart: '8000M',
       env: {
         NODE_ENV: 'production',
         API_PORT: process.env.API_PORT || 5001,
-        // Enable garbage collection - increased heap for more accounts
-        NODE_OPTIONS: '--expose-gc --max-old-space-size=1024',
+        // Enable garbage collection - 8GB heap for heavy workloads
+        NODE_OPTIONS: '--expose-gc --max-old-space-size=8192',
       },
       // Restart strategy
       min_uptime: '10s',
@@ -43,11 +43,11 @@ module.exports = {
       autorestart: true,
       watch: false,
       // Restart only on memory limit
-      max_memory_restart: '500M',
+      max_memory_restart: '2000M',
       env: {
         NODE_ENV: 'production',
         PORT: 3000,
-        NODE_OPTIONS: '--max-old-space-size=400',
+        NODE_OPTIONS: '--max-old-space-size=2048',
       },
       // Restart strategy
       min_uptime: '10s',
@@ -74,7 +74,7 @@ module.exports = {
       exec_mode: 'fork',
       autorestart: true,
       watch: false,
-      max_memory_restart: '100M',
+      max_memory_restart: '500M',
       env: {
         NODE_ENV: 'production',
         TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN,
