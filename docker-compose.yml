@@ -1,3 +1,4 @@
+# Only PostgreSQL and Redis - app runs via PM2 natively
 services:
   postgres:
     image: postgres:16-alpine
@@ -30,97 +31,17 @@ services:
       redis-server
       --appendonly yes
       --appendfsync everysec
-      --maxmemory 128mb
+      --maxmemory 256mb
       --maxmemory-policy noeviction
-      --requirepass ${REDIS_PASSWORD:-adilhankrasavchikvoobshebomba}
+      --requirepass ${REDIS_PASSWORD:-123321adil}
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-adilhankrasavchikvoobshebomba}", "ping"]
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-123321adil}", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
-
-  wa-manager:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: wa-manager
-    restart: unless-stopped
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    ports:
-      - "3000:3000"
-      - "5001:5001"
-    environment:
-      # Prisma connection pool: 10 connections (reduced to save memory)
-      DATABASE_URL: ${DATABASE_URL:-postgresql://postgres:postgres@postgres:5432/wa_manager?schema=public&connection_limit=10&pool_timeout=10&connect_timeout=30}
-      DIRECT_URL: ${DIRECT_URL:-postgresql://postgres:postgres@postgres:5432/wa_manager?schema=public}
-      REDIS_HOST: redis
-      REDIS_PORT: 6379
-      REDIS_PASSWORD: ${REDIS_PASSWORD:-adilhankrasavchikvoobshebomba}
-      NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-http://localhost:3000}
-      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:5001}
-      API_PORT: 5001
-      API_SECRET_KEY: ${API_SECRET_KEY}
-      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
-      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}
-      NODE_ENV: production
-      # Enable Node.js optimizations
-      UV_THREADPOOL_SIZE: 4
-    volumes:
-      - baileys_auth:/app/.baileys_auth
-      - wa_logs:/app/logs
-    # Graceful shutdown timeout (45 seconds)
-    stop_grace_period: 45s
-    healthcheck:
-      test: ["CMD", "sh", "-c", "curl -sf http://localhost:3000 -o /dev/null && curl -sf http://localhost:5001/health -o /dev/null"]
-      interval: 30s
-      timeout: 15s
-      retries: 3
-      start_period: 90s
-    # Log rotation to prevent disk fill
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "50m"
-        max-file: "3"
-    deploy:
-      resources:
-        limits:
-          cpus: '2.0'
-          memory: 2048M
-        reservations:
-          cpus: '0.5'
-          memory: 1024M
-      # Политика перезапуска при сбое
-      restart_policy:
-        condition: on-failure
-        delay: 5s
-        max_attempts: 20
-        window: 120s
-    # Дополнительная безопасность
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
-    cap_add:
-      - NET_BIND_SERVICE
-    # Защита от OOM killer - приоритет ниже
-    oom_score_adj: 500
-    # Block malicious domains (virus protection)
-    extra_hosts:
-      - "repositorylinux.publicvm.com:127.0.0.1"
-      - "publicvm.com:127.0.0.1"
-      - "linux.publicvm.com:127.0.0.1"
 
 volumes:
   postgres_data:
     driver: local
   redis_data:
-    driver: local
-  baileys_auth:
-    driver: local
-  wa_logs:
     driver: local
