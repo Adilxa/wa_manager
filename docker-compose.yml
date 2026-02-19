@@ -26,8 +26,8 @@ services:
       redis-server
       --appendonly yes
       --appendfsync everysec
-      --maxmemory 256mb
-      --maxmemory-policy allkeys-lru
+      --maxmemory 128mb
+      --maxmemory-policy noeviction
       --requirepass ${REDIS_PASSWORD:-adilhankrasavchikvoobshebomba}
     healthcheck:
       test:
