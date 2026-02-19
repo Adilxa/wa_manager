@@ -7,10 +7,17 @@ const util = require('util');
 const execPromise = util.promisify(exec);
 
 // Configuration
-const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '6252681855:AAHRCXOob22ZkLl-eowZXqBu0mZ7TG8ir_Y';
+const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const CHECK_INTERVAL = 15 * 60 * 1000; // 15 минут
 const REDIS_HOST = process.env.REDIS_HOST || 'redis';
 const REDIS_PORT = process.env.REDIS_PORT || 6379;
+const REDIS_PASSWORD = process.env.REDIS_PASSWORD;
+
+// Validate required env vars
+if (!BOT_TOKEN) {
+  console.error('ERROR: TELEGRAM_BOT_TOKEN is required!');
+  process.exit(1);
+}
 
 // Initialize Prisma
 const prisma = new PrismaClient();
@@ -108,6 +115,7 @@ async function checkRedis() {
     client = new Redis({
       host: REDIS_HOST,
       port: REDIS_PORT,
+      password: REDIS_PASSWORD,
       maxRetriesPerRequest: 1,
       retryStrategy: () => null // Don't retry
     });

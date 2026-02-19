@@ -8,12 +8,12 @@ module.exports = {
       autorestart: true,
       watch: false,
       // Restart only on memory limit (no cron - causes kill issues)
-      max_memory_restart: '500M',
+      max_memory_restart: '1200M',
       env: {
         NODE_ENV: 'production',
         API_PORT: process.env.API_PORT || 5001,
-        // Enable garbage collection
-        NODE_OPTIONS: '--expose-gc --max-old-space-size=400',
+        // Enable garbage collection - increased heap for more accounts
+        NODE_OPTIONS: '--expose-gc --max-old-space-size=1024',
       },
       // Restart strategy
       min_uptime: '10s',
@@ -43,11 +43,11 @@ module.exports = {
       autorestart: true,
       watch: false,
       // Restart only on memory limit
-      max_memory_restart: '300M',
+      max_memory_restart: '500M',
       env: {
         NODE_ENV: 'production',
         PORT: 3000,
-        NODE_OPTIONS: '--max-old-space-size=250',
+        NODE_OPTIONS: '--max-old-space-size=400',
       },
       // Restart strategy
       min_uptime: '10s',
@@ -77,6 +77,10 @@ module.exports = {
       max_memory_restart: '100M',
       env: {
         NODE_ENV: 'production',
+        TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN,
+        REDIS_HOST: process.env.REDIS_HOST || 'localhost',
+        REDIS_PORT: process.env.REDIS_PORT || 6379,
+        REDIS_PASSWORD: process.env.REDIS_PASSWORD,
       },
       // Auto-restart settings
       restart_delay: 10000,
