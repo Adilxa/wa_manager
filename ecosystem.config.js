@@ -8,12 +8,12 @@ module.exports = {
       autorestart: true,
       watch: false,
       // Restart only on memory limit (no cron - causes kill issues)
-      max_memory_restart: '8000M',
+      max_memory_restart: '16000M',
       env: {
         NODE_ENV: 'production',
         API_PORT: process.env.API_PORT || 5001,
-        // Enable garbage collection - 8GB heap for heavy workloads
-        NODE_OPTIONS: '--expose-gc --max-old-space-size=8192',
+        // Enable garbage collection - 16GB heap for heavy workloads
+        NODE_OPTIONS: '--expose-gc --max-old-space-size=16384',
       },
       // Restart strategy
       min_uptime: '10s',
@@ -43,11 +43,11 @@ module.exports = {
       autorestart: true,
       watch: false,
       // Restart only on memory limit
-      max_memory_restart: '2000M',
+      max_memory_restart: '4000M',
       env: {
         NODE_ENV: 'production',
         PORT: 3000,
-        NODE_OPTIONS: '--max-old-space-size=2048',
+        NODE_OPTIONS: '--max-old-space-size=4096',
       },
       // Restart strategy
       min_uptime: '10s',
