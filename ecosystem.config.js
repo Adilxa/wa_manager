@@ -7,31 +7,29 @@ module.exports = {
       exec_mode: 'fork',
       autorestart: true,
       watch: false,
-      // Restart only on memory limit (no cron - causes kill issues)
-      max_memory_restart: '16000M',
+      // Memory limit - restart if exceeds 8GB (for 100-150 clients on 32GB server)
+      max_memory_restart: '8000M',
       env: {
         NODE_ENV: 'production',
         API_PORT: process.env.API_PORT || 5001,
-        // Enable garbage collection - 16GB heap for heavy workloads
-        NODE_OPTIONS: '--expose-gc --max-old-space-size=16384',
+        // Enable garbage collection with 8GB heap limit
+        NODE_OPTIONS: '--expose-gc --max-old-space-size=8192 --gc-interval=100',
       },
       // Restart strategy
-      min_uptime: '10s',
-      max_restarts: 50,
-      restart_delay: 3000,
+      min_uptime: '30s',
+      max_restarts: 20,
+      restart_delay: 5000,
       // Exponential backoff
-      exp_backoff_restart_delay: 100,
+      exp_backoff_restart_delay: 1000,
       // Logging
       error_file: './logs/api-error.log',
       out_file: './logs/api-out.log',
       log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
       merge_logs: true,
-      // Auto-restart on exceptions
-      ignore_watch: ['node_modules', 'logs', '.next', '.baileys_auth'],
-      // Graceful shutdown - increased timeout
+      // Graceful shutdown
       kill_timeout: 30000,
       wait_ready: true,
-      listen_timeout: 10000,
+      listen_timeout: 15000,
       shutdown_with_message: true,
     },
     {
@@ -42,28 +40,26 @@ module.exports = {
       exec_mode: 'fork',
       autorestart: true,
       watch: false,
-      // Restart only on memory limit
-      max_memory_restart: '4000M',
+      // Memory limit for frontend
+      max_memory_restart: '2000M',
       env: {
         NODE_ENV: 'production',
         PORT: 3000,
-        NODE_OPTIONS: '--max-old-space-size=4096',
+        NODE_OPTIONS: '--max-old-space-size=2048',
       },
       // Restart strategy
       min_uptime: '10s',
-      max_restarts: 50,
+      max_restarts: 20,
       restart_delay: 3000,
       // Exponential backoff
-      exp_backoff_restart_delay: 100,
+      exp_backoff_restart_delay: 500,
       // Logging
       error_file: './logs/frontend-error.log',
       out_file: './logs/frontend-out.log',
       log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
       merge_logs: true,
-      // Auto-restart on exceptions
-      ignore_watch: ['node_modules', 'logs', '.next', '.baileys_auth'],
       // Graceful shutdown
-      kill_timeout: 30000,
+      kill_timeout: 15000,
       listen_timeout: 10000,
       shutdown_with_message: true,
     },
@@ -74,7 +70,7 @@ module.exports = {
       exec_mode: 'fork',
       autorestart: true,
       watch: false,
-      max_memory_restart: '500M',
+      max_memory_restart: '256M',
       env: {
         NODE_ENV: 'production',
         TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN,
@@ -82,19 +78,19 @@ module.exports = {
         REDIS_PORT: process.env.REDIS_PORT || 6379,
         REDIS_PASSWORD: process.env.REDIS_PASSWORD,
       },
-      // Auto-restart settings
+      // Restart settings
       restart_delay: 10000,
-      max_restarts: 50,
+      max_restarts: 20,
       min_uptime: '30s',
-      // Exponential backoff restart
-      exp_backoff_restart_delay: 100,
+      // Exponential backoff
+      exp_backoff_restart_delay: 500,
       // Logging
       error_file: './logs/monitor-error.log',
       out_file: './logs/monitor-out.log',
       log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
       merge_logs: true,
       // Graceful shutdown
-      kill_timeout: 30000,
+      kill_timeout: 15000,
       listen_timeout: 5000,
       shutdown_with_message: true,
     },
