@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useRef, useCallback } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Plus,
@@ -17,7 +17,16 @@ import {
   User,
   Hash,
   RefreshCw,
-  Copy
+  Copy,
+  Zap,
+  Activity,
+  Shield,
+  MessageSquare,
+  Wifi,
+  WifiOff,
+  Settings,
+  MoreVertical,
+  X
 } from 'lucide-react';
 
 interface Account {
@@ -44,27 +53,27 @@ export default function Dashboard() {
   const [selectedAccount, setSelectedAccount] = useState<Account | null>(null);
   const [sending, setSending] = useState(false);
   const [useLimits, setUseLimits] = useState(true);
+  const [showCreateForm, setShowCreateForm] = useState(false);
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
 
-  // Refs для отслеживания состояния без ре-рендеров
   const accountsRef = useRef<Account[]>([]);
-  const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const isLoadingRef = useRef(false);
 
-  // Проверка авторизации
+  // Toast notification
+  const showToast = (message: string, type: 'success' | 'error' | 'info' = 'info') => {
+    setToast({ message, type });
+    setTimeout(() => setToast(null), 3000);
+  };
+
   useEffect(() => {
     const isAuth = localStorage.getItem('wa_manager_auth');
     if (!isAuth) {
       router.push('/login');
     }
-
   }, [router]);
 
-  // Загрузка аккаунтов с защитой от множественных запросов
   const loadAccounts = async (showRefreshIndicator = false) => {
-    // Предотвращаем множественные одновременные запросы
-    if (isLoadingRef.current && !showRefreshIndicator) {
-      return;
-    }
+    if (isLoadingRef.current && !showRefreshIndicator) return;
 
     isLoadingRef.current = true;
     if (showRefreshIndicator) setRefreshing(true);
@@ -72,21 +81,20 @@ export default function Dashboard() {
     try {
       const response = await fetch(`${API_URL}/api/accounts`, {
         cache: 'no-store',
-        headers: {
-          'Cache-Control': 'no-cache',
-        },
+        headers: { 'Cache-Control': 'no-cache' },
       });
 
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
+      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
 
       const data = await response.json();
-
-      // Обновляем ref и state
       accountsRef.current = data;
       setAccounts(data);
 
+      // Update selected account if it exists
+      if (selectedAccount) {
+        const updated = data.find((a: Account) => a.id === selectedAccount.id);
+        if (updated) setSelectedAccount(updated);
+      }
     } catch (error) {
       console.error('Failed to load accounts:', error);
     } finally {
@@ -96,40 +104,23 @@ export default function Dashboard() {
     }
   };
 
-  // Начальная загрузка и polling
   useEffect(() => {
-    // Начальная загрузка
     loadAccounts();
 
-    // Умный polling - обновляем только когда есть активные процессы
     const interval = setInterval(() => {
       const currentAccounts = accountsRef.current;
-
-      // Проверяем есть ли аккаунты в процессе подключения
       const hasConnectingAccounts = currentAccounts.some(
         acc => ['CONNECTING', 'AUTHENTICATING', 'QR_READY'].includes(acc.clientStatus)
       );
+      if (hasConnectingAccounts) loadAccounts();
+    }, 5000);
 
-      // Обновляем только если есть активные процессы подключения
-      if (hasConnectingAccounts) {
-        loadAccounts();
-      }
-    }, 5000); // Проверяем каждые 5 секунд
+    return () => clearInterval(interval);
+  }, []);
 
-    pollingIntervalRef.current = interval;
-
-    // Cleanup
-    return () => {
-      if (interval) {
-        clearInterval(interval);
-      }
-    };
-  }, []); // Только при монтировании
-
-  // Создание аккаунта
   const createAccount = async () => {
     if (!newAccountName.trim()) {
-      alert('⚠️ Please enter an account name');
+      showToast('Please enter an account name', 'error');
       return;
     }
 
@@ -146,25 +137,18 @@ export default function Dashboard() {
       }
 
       const newAccount = await response.json();
-
-      // Очищаем форму
       setNewAccountName('');
       setUseLimits(true);
-
-      // Обновляем список
+      setShowCreateForm(false);
       await loadAccounts(true);
-
-      // Автоматически выбираем новый аккаунт
       setSelectedAccount(newAccount);
-
-      alert('✅ Account created successfully!');
+      showToast('Account created successfully!', 'success');
     } catch (error) {
       console.error('Failed to create account:', error);
-      alert('❌ Failed to create account. Please try again.');
+      showToast('Failed to create account', 'error');
     }
   };
 
-  // Подключение
   const connectAccount = async (accountId: string) => {
     try {
       const response = await fetch(`${API_URL}/api/accounts/${accountId}/connect`, {
@@ -172,55 +156,41 @@ export default function Dashboard() {
         headers: { 'Content-Type': 'application/json' },
       });
 
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
+      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
 
       await loadAccounts(true);
+      showToast('Connecting...', 'info');
     } catch (error) {
       console.error('Failed to connect:', error);
-      alert('❌ Failed to connect account. Please try again.');
+      showToast('Failed to connect account', 'error');
     }
   };
 
-  // Регенерация QR кода (переподключение)
   const regenerateQR = async (accountId: string) => {
     setRegeneratingQR(true);
     try {
-      // Сначала отключаем
-      const disconnectRes = await fetch(`${API_URL}/api/accounts/${accountId}/disconnect`, {
+      await fetch(`${API_URL}/api/accounts/${accountId}/disconnect`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
       });
 
-      if (!disconnectRes.ok) {
-        throw new Error('Failed to disconnect');
-      }
-
-      // Ждем немного
       await new Promise(resolve => setTimeout(resolve, 1000));
 
-      // Затем снова подключаем
-      const connectRes = await fetch(`${API_URL}/api/accounts/${accountId}/connect`, {
+      await fetch(`${API_URL}/api/accounts/${accountId}/connect`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
       });
 
-      if (!connectRes.ok) {
-        throw new Error('Failed to reconnect');
-      }
-
       await loadAccounts(true);
-      alert('✅ QR Code regenerated successfully!');
+      showToast('QR Code regenerated!', 'success');
     } catch (error) {
       console.error('Failed to regenerate QR:', error);
-      alert('❌ Failed to regenerate QR code. Please try again.');
+      showToast('Failed to regenerate QR code', 'error');
     } finally {
       setRegeneratingQR(false);
     }
   };
 
-  // Отключение
   const disconnectAccount = async (accountId: string) => {
     try {
       const response = await fetch(`${API_URL}/api/accounts/${accountId}/disconnect`, {
@@ -228,24 +198,17 @@ export default function Dashboard() {
         headers: { 'Content-Type': 'application/json' },
       });
 
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
+      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
 
       await loadAccounts(true);
-
-      if (selectedAccount?.id === accountId) {
-        setSelectedAccount(null);
-      }
-
-      alert('✅ Account disconnected successfully!');
+      if (selectedAccount?.id === accountId) setSelectedAccount(null);
+      showToast('Account disconnected', 'success');
     } catch (error) {
       console.error('Failed to disconnect:', error);
-      alert('❌ Failed to disconnect account. Please try again.');
+      showToast('Failed to disconnect account', 'error');
     }
   };
 
-  // Изменение useLimits
   const toggleUseLimits = async (accountId: string, currentValue: boolean) => {
     try {
       const response = await fetch(`${API_URL}/api/accounts/${accountId}`, {
@@ -254,125 +217,62 @@ export default function Dashboard() {
         body: JSON.stringify({ useLimits: !currentValue }),
       });
 
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
+      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
 
       const updatedAccount = await response.json();
-
       await loadAccounts(true);
-
-      // Обновляем выбранный аккаунт если это он
-      if (selectedAccount?.id === accountId) {
-        setSelectedAccount(updatedAccount);
-      }
-
-      alert(`✅ Rate limits ${!currentValue ? 'enabled' : 'disabled'} successfully!`);
+      if (selectedAccount?.id === accountId) setSelectedAccount(updatedAccount);
+      showToast(`Rate limits ${!currentValue ? 'enabled' : 'disabled'}`, 'success');
     } catch (error) {
       console.error('Failed to toggle limits:', error);
-      alert('❌ Failed to update rate limits. Please try again.');
+      showToast('Failed to update rate limits', 'error');
     }
   };
 
-  // Копирование ссылки на QR
   const copyQRLink = async (accountId: string) => {
     const link = `${window.location.origin}/qr/${accountId}`;
     try {
       await navigator.clipboard.writeText(link);
-      alert('✅ QR link copied to clipboard!');
+      showToast('QR link copied!', 'success');
     } catch (error) {
-      console.error('Failed to copy link:', error);
-      // Fallback для старых браузеров
-      const textArea = document.createElement('textarea');
-      textArea.value = link;
-      document.body.appendChild(textArea);
-      textArea.select();
-      try {
-        document.execCommand('copy');
-        alert('✅ QR link copied to clipboard!');
-      } catch (err) {
-        alert('❌ Failed to copy link. Please copy manually: ' + link);
-      }
-      document.body.removeChild(textArea);
+      showToast('Failed to copy link', 'error');
     }
   };
 
-  // Удаление
   const deleteAccount = async (accountId: string) => {
-    if (!confirm('Are you sure you want to delete this account? This action cannot be undone.')) return;
-
-    console.log('🗑️ Starting delete for account:', accountId);
+    if (!confirm('Are you sure you want to delete this account?')) return;
 
     try {
-      const deleteUrl = `${API_URL}/api/accounts/${accountId}`;
-      console.log('DELETE URL:', deleteUrl);
-
-      const response = await fetch(deleteUrl, {
+      const response = await fetch(`${API_URL}/api/accounts/${accountId}`, {
         method: 'DELETE',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
       });
 
-      console.log('DELETE Response status:', response.status);
-      console.log('DELETE Response ok:', response.ok);
+      if (!response.ok) throw new Error('Failed to delete');
 
-      // Попытка прочитать тело ответа
-      let responseData;
-      try {
-        const text = await response.text();
-        console.log('DELETE Response text:', text);
-        responseData = text ? JSON.parse(text) : {};
-      } catch (parseError) {
-        console.error('Failed to parse response:', parseError);
-        responseData = {};
-      }
-
-      if (!response.ok) {
-        const errorMessage = responseData.error || `HTTP error! status: ${response.status}`;
-        console.error('DELETE failed:', errorMessage);
-        throw new Error(errorMessage);
-      }
-
-      console.log('✅ DELETE successful, response:', responseData);
-
-      // Успешно удалено - обновляем список
       await loadAccounts(true);
-
-      // Если удален выбранный аккаунт, снимаем выбор
-      if (selectedAccount?.id === accountId) {
-        setSelectedAccount(null);
-      }
-
-      alert('✅ Account deleted successfully!');
+      if (selectedAccount?.id === accountId) setSelectedAccount(null);
+      showToast('Account deleted', 'success');
     } catch (error: any) {
-      console.error('❌ Failed to delete account:', error);
-      console.error('Error details:', {
-        message: error.message,
-        stack: error.stack,
-      });
-      alert(`❌ Failed to delete account: ${error.message || 'Unknown error'}`);
+      console.error('Failed to delete account:', error);
+      showToast(`Failed to delete: ${error.message}`, 'error');
     }
   };
 
-  // Отправка сообщения
   const sendMessage = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-
     if (!selectedAccount) {
-      alert('⚠️ Please select an account first');
+      showToast('Please select an account first', 'error');
       return;
     }
 
     setSending(true);
-
     const formData = new FormData(e.currentTarget);
     const to = (formData.get('to') as string).trim();
     const message = (formData.get('message') as string).trim();
 
     if (!to || !message) {
-      alert('⚠️ Please fill in all fields');
+      showToast('Please fill in all fields', 'error');
       setSending(false);
       return;
     }
@@ -381,24 +281,19 @@ export default function Dashboard() {
       const response = await fetch(`${API_URL}/api/messages/send`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          accountId: selectedAccount.id,
-          to,
-          message,
-        }),
+        body: JSON.stringify({ accountId: selectedAccount.id, to, message }),
       });
 
       const data = await response.json();
-
       if (response.ok) {
         e.currentTarget.reset();
-        alert('✅ Message sent successfully!');
+        showToast('Message sent!', 'success');
       } else {
         throw new Error(data.error || 'Failed to send message');
       }
     } catch (error: any) {
       console.error('Failed to send message:', error);
-      alert(`❌ ${error.message || 'Failed to send message. Please try again.'}`);
+      showToast(error.message || 'Failed to send message', 'error');
     } finally {
       setSending(false);
     }
@@ -407,119 +302,210 @@ export default function Dashboard() {
   const getStatusConfig = (status: string) => {
     switch (status) {
       case 'CONNECTED':
-        return { color: 'text-green-400', bg: 'bg-green-400/10', icon: CheckCircle2, label: 'Connected' };
+        return { color: 'text-green-400', bg: 'bg-green-500/10', border: 'border-green-500/30', icon: CheckCircle2, label: 'Connected', pulse: false };
       case 'QR_READY':
-        return { color: 'text-yellow-400', bg: 'bg-yellow-400/10', icon: QrCode, label: 'Scan QR' };
+        return { color: 'text-amber-400', bg: 'bg-amber-500/10', border: 'border-amber-500/30', icon: QrCode, label: 'Scan QR', pulse: true };
       case 'CONNECTING':
       case 'AUTHENTICATING':
-        return { color: 'text-blue-400', bg: 'bg-blue-400/10', icon: Loader2, label: 'Connecting...' };
+        return { color: 'text-blue-400', bg: 'bg-blue-500/10', border: 'border-blue-500/30', icon: Loader2, label: 'Connecting...', pulse: true };
       case 'FAILED':
-        return { color: 'text-red-400', bg: 'bg-red-400/10', icon: AlertCircle, label: 'Failed' };
+        return { color: 'text-red-400', bg: 'bg-red-500/10', border: 'border-red-500/30', icon: AlertCircle, label: 'Failed', pulse: false };
       default:
-        return { color: 'text-gray-400', bg: 'bg-gray-400/10', icon: Clock, label: 'Disconnected' };
+        return { color: 'text-gray-400', bg: 'bg-gray-500/10', border: 'border-gray-500/30', icon: Clock, label: 'Offline', pulse: false };
     }
   };
 
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-black flex items-center justify-center">
-        <div className="flex items-center gap-3 text-white">
-          <Loader2 className="w-6 h-6 animate-spin" />
-          <span className="text-lg">Loading accounts...</span>
-        </div>
-      </div>
-    );
-  }
+  // Stats
+  const stats = {
+    total: accounts.length,
+    connected: accounts.filter(a => a.clientStatus === 'CONNECTED').length,
+    withLimits: accounts.filter(a => a.useLimits).length,
+    pending: accounts.filter(a => ['CONNECTING', 'AUTHENTICATING', 'QR_READY'].includes(a.clientStatus)).length,
+  };
 
   const handleLogout = () => {
     localStorage.removeItem('wa_manager_auth');
     router.push('/login');
   };
 
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-black flex items-center justify-center">
+        <div className="flex flex-col items-center gap-4">
+          <div className="relative">
+            <div className="w-16 h-16 border-4 border-green-500/20 rounded-full"></div>
+            <div className="absolute inset-0 w-16 h-16 border-4 border-transparent border-t-green-500 rounded-full animate-spin"></div>
+          </div>
+          <p className="text-gray-400 text-sm">Loading accounts...</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-black text-white">
-      <div className="max-w-7xl mx-auto px-4 py-8">
+      {/* Toast Notification */}
+      {toast && (
+        <div className={`fixed top-4 right-4 z-50 px-4 py-3 rounded-xl flex items-center gap-3 shadow-2xl animate-float
+          ${toast.type === 'success' ? 'bg-green-500/20 border border-green-500/30 text-green-400' :
+            toast.type === 'error' ? 'bg-red-500/20 border border-red-500/30 text-red-400' :
+            'bg-blue-500/20 border border-blue-500/30 text-blue-400'}`}>
+          {toast.type === 'success' && <CheckCircle2 className="w-5 h-5" />}
+          {toast.type === 'error' && <AlertCircle className="w-5 h-5" />}
+          {toast.type === 'info' && <Activity className="w-5 h-5" />}
+          <span className="font-medium">{toast.message}</span>
+        </div>
+      )}
+
+      <div className="max-w-7xl mx-auto px-4 py-6">
         {/* Header */}
-        <div className="mb-10 flex items-start justify-between">
-          <div>
-            <h1 className="text-4xl font-bold bg-gradient-to-r from-white to-gray-400 bg-clip-text text-transparent">
-              OCTO WhatsApp API
-            </h1>
-            <p className="text-gray-400 mt-2">Manage multiple WhatsApp accounts with ease</p>
+        <header className="flex items-center justify-between mb-8">
+          <div className="flex items-center gap-4">
+            <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-green-500 to-emerald-600 flex items-center justify-center shadow-lg shadow-green-500/20">
+              <MessageSquare className="w-6 h-6 text-white" />
+            </div>
+            <div>
+              <h1 className="text-2xl font-bold gradient-text">OCTO WhatsApp</h1>
+              <p className="text-gray-500 text-sm">Multi-Account Manager</p>
+            </div>
           </div>
+
           <div className="flex items-center gap-3">
             <button
+              onClick={() => loadAccounts(true)}
+              disabled={refreshing}
+              className="p-2.5 rounded-xl bg-gray-900 border border-gray-800 text-gray-400 hover:text-white hover:border-gray-700 transition disabled:opacity-50"
+            >
+              <RefreshCw className={`w-5 h-5 ${refreshing ? 'animate-spin' : ''}`} />
+            </button>
+            <button
               onClick={handleLogout}
-              className="flex items-center gap-2 px-4 py-2 bg-gray-900 border border-gray-800 rounded-lg text-gray-400 hover:text-white hover:border-gray-700 transition"
+              className="flex items-center gap-2 px-4 py-2.5 bg-gray-900 border border-gray-800 rounded-xl text-gray-400 hover:text-white hover:border-gray-700 transition"
             >
               <LogOut className="w-4 h-4" />
-              Logout
+              <span className="hidden sm:inline">Logout</span>
             </button>
           </div>
-        </div>
+        </header>
 
-        {/* Create Account */}
-        <div className="bg-gray-900 border border-gray-800 rounded-xl p-6 mb-8 backdrop-blur-sm">
-          <h2 className="text-xl font-semibold mb-4 flex items-center gap-2">
-            <Plus className="w-5 h-5" />
-            Create New Account
-          </h2>
-          <div className="space-y-3">
-            <div className="flex gap-3">
-              <input
-                type="text"
-                value={newAccountName}
-                onChange={(e) => setNewAccountName(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && createAccount()}
-                placeholder="Enter account name..."
-                className="flex-1 px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-white/20 focus:border-white/50 transition"
-              />
-              <button
-                onClick={createAccount}
-                disabled={!newAccountName.trim()}
-                className="px-6 py-3 bg-white text-black rounded-lg font-medium hover:bg-gray-200 disabled:bg-gray-800 disabled:text-gray-500 disabled:cursor-not-allowed transition flex items-center gap-2"
-              >
-                <Plus className="w-4 h-4" />
-                Create
-              </button>
+        {/* Stats Grid */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-8">
+          <div className="stat-card bg-gray-900/50 border border-gray-800/50 text-gray-400">
+            <div className="flex items-center gap-3">
+              <div className="p-2 rounded-lg bg-gray-800">
+                <Smartphone className="w-5 h-5" />
+              </div>
+              <div>
+                <p className="text-2xl font-bold text-white">{stats.total}</p>
+                <p className="text-xs text-gray-500">Total Accounts</p>
+              </div>
             </div>
-            <label className="flex items-center gap-2 text-sm text-gray-400 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={useLimits}
-                onChange={(e) => setUseLimits(e.target.checked)}
-                className="w-4 h-4 rounded border-gray-600 bg-gray-800 text-white focus:ring-2 focus:ring-white/20"
-              />
-              <span>Use rate limits (recommended for new accounts)</span>
-            </label>
+          </div>
+
+          <div className="stat-card bg-green-500/5 border border-green-500/20 text-green-400">
+            <div className="flex items-center gap-3">
+              <div className="p-2 rounded-lg bg-green-500/10">
+                <Wifi className="w-5 h-5" />
+              </div>
+              <div>
+                <p className="text-2xl font-bold text-green-400">{stats.connected}</p>
+                <p className="text-xs text-green-400/60">Connected</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="stat-card bg-amber-500/5 border border-amber-500/20 text-amber-400">
+            <div className="flex items-center gap-3">
+              <div className="p-2 rounded-lg bg-amber-500/10">
+                <Shield className="w-5 h-5" />
+              </div>
+              <div>
+                <p className="text-2xl font-bold text-amber-400">{stats.withLimits}</p>
+                <p className="text-xs text-amber-400/60">With Limits</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="stat-card bg-blue-500/5 border border-blue-500/20 text-blue-400">
+            <div className="flex items-center gap-3">
+              <div className="p-2 rounded-lg bg-blue-500/10">
+                <Activity className="w-5 h-5" />
+              </div>
+              <div>
+                <p className="text-2xl font-bold text-blue-400">{stats.pending}</p>
+                <p className="text-xs text-blue-400/60">Pending</p>
+              </div>
+            </div>
           </div>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-          {/* Accounts List */}
-          <div className="space-y-4">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-xl font-semibold flex items-center gap-2">
-                <Smartphone className="w-5 h-5" />
-                Accounts
-                <span className="text-sm text-gray-400 font-normal">({accounts.length})</span>
-              </h2>
+        <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
+          {/* Accounts List - 3 columns */}
+          <div className="lg:col-span-3 space-y-4">
+            {/* Create Account Button/Form */}
+            {!showCreateForm ? (
               <button
-                onClick={() => loadAccounts(true)}
-                disabled={refreshing}
-                className="flex items-center gap-2 px-3 py-1.5 bg-gray-800 border border-gray-700 rounded-lg text-gray-400 hover:text-white hover:border-gray-600 transition text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                onClick={() => setShowCreateForm(true)}
+                className="w-full p-4 rounded-xl border-2 border-dashed border-gray-800 hover:border-green-500/50 hover:bg-green-500/5 transition-all duration-300 flex items-center justify-center gap-3 text-gray-400 hover:text-green-400 group"
               >
-                <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} />
-                Refresh
-              </button>
-            </div>
-
-            {accounts.length === 0 ? (
-              <div className="bg-gray-900 border border-gray-800 rounded-xl p-8 text-center">
-                <div className="bg-gray-800 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4">
-                  <Smartphone className="w-8 h-8 text-gray-600" />
+                <div className="p-2 rounded-lg bg-gray-900 group-hover:bg-green-500/10 transition">
+                  <Plus className="w-5 h-5" />
                 </div>
-                <p className="text-gray-400">No accounts yet. Create one to get started.</p>
+                <span className="font-medium">Add New Account</span>
+              </button>
+            ) : (
+              <div className="glass rounded-xl p-5 space-y-4">
+                <div className="flex items-center justify-between">
+                  <h3 className="font-semibold flex items-center gap-2">
+                    <Plus className="w-5 h-5 text-green-400" />
+                    Create New Account
+                  </h3>
+                  <button
+                    onClick={() => setShowCreateForm(false)}
+                    className="p-1.5 rounded-lg hover:bg-gray-800 text-gray-400 hover:text-white transition"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+                <div className="flex gap-3">
+                  <input
+                    type="text"
+                    value={newAccountName}
+                    onChange={(e) => setNewAccountName(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && createAccount()}
+                    placeholder="Account name..."
+                    className="flex-1 px-4 py-3 bg-black/50 border border-gray-800 rounded-xl text-white placeholder-gray-600 focus:outline-none focus:border-green-500/50 transition"
+                    autoFocus
+                  />
+                  <button
+                    onClick={createAccount}
+                    disabled={!newAccountName.trim()}
+                    className="px-5 py-3 bg-gradient-to-r from-green-500 to-emerald-600 text-white rounded-xl font-medium hover:shadow-lg hover:shadow-green-500/20 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-300"
+                  >
+                    Create
+                  </button>
+                </div>
+                <label className="flex items-center gap-2 text-sm text-gray-400 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={useLimits}
+                    onChange={(e) => setUseLimits(e.target.checked)}
+                    className="w-4 h-4 rounded border-gray-600 bg-gray-800 text-green-500 focus:ring-green-500/20"
+                  />
+                  <Shield className="w-3.5 h-3.5" />
+                  Use rate limits (recommended)
+                </label>
+              </div>
+            )}
+
+            {/* Accounts */}
+            {accounts.length === 0 ? (
+              <div className="glass rounded-xl p-12 text-center">
+                <div className="w-20 h-20 rounded-2xl bg-gray-800/50 flex items-center justify-center mx-auto mb-4">
+                  <Smartphone className="w-10 h-10 text-gray-600" />
+                </div>
+                <h3 className="text-lg font-medium mb-2">No accounts yet</h3>
+                <p className="text-gray-500 text-sm">Create your first WhatsApp account to get started</p>
               </div>
             ) : (
               <div className="space-y-3">
@@ -532,82 +518,74 @@ export default function Dashboard() {
                     <div
                       key={account.id}
                       onClick={() => setSelectedAccount(account)}
-                      className={`group bg-gray-900 border rounded-xl p-5 cursor-pointer transition-all duration-200
-                        ${isSelected
-                          ? 'border-white bg-white/5 shadow-xl shadow-white/5'
-                          : 'border-gray-800 hover:border-gray-700 hover:bg-gray-800/50'
-                        }`}
+                      className={`group glass rounded-xl p-4 cursor-pointer transition-all duration-300
+                        ${isSelected ? 'border-green-500/50 bg-green-500/5 glow-green' : 'hover:border-gray-700'}`}
                     >
-                      <div className="flex items-start justify-between mb-3">
-                        <div className="flex-1">
-                          <h3 className="font-semibold text-lg flex items-center gap-2">
-                            <User className="w-4 h-4 text-gray-500" />
-                            {account.name}
-                          </h3>
-                          {account.phoneNumber && (
-                            <p className="text-sm text-gray-400 mt-1 flex items-center gap-1">
-                              <Hash className="w-3 h-3" />
-                              {account.phoneNumber}
-                            </p>
+                      <div className="flex items-center gap-4">
+                        {/* Avatar */}
+                        <div className={`relative w-12 h-12 rounded-xl flex items-center justify-center font-bold text-lg
+                          ${account.clientStatus === 'CONNECTED' ? 'bg-green-500/10 text-green-400' : 'bg-gray-800 text-gray-400'}`}>
+                          {account.name.charAt(0).toUpperCase()}
+                          {account.clientStatus === 'CONNECTED' && (
+                            <div className="absolute -bottom-1 -right-1 w-4 h-4 bg-green-500 rounded-full border-2 border-black"></div>
                           )}
-                          <div className="flex items-center gap-2 mt-2">
-                            <span className={`text-xs px-2 py-0.5 rounded-full ${account.useLimits ? 'bg-yellow-500/10 text-yellow-400' : 'bg-green-500/10 text-green-400'}`}>
-                              {account.useLimits ? '⚡ With Limits' : '🚀 No Limits'}
-                            </span>
-                          </div>
                         </div>
-                        <div className={`flex items-center gap-2 px-3 py-1 rounded-full text-xs font-medium ${status.bg} ${status.color}`}>
-                          <StatusIcon className={`w-3 h-3 ${status.label.includes('Connecting') ? 'animate-spin' : ''}`} />
+
+                        {/* Info */}
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2">
+                            <h3 className="font-semibold truncate">{account.name}</h3>
+                            {account.useLimits && (
+                              <Shield className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                            )}
+                          </div>
+                          <p className="text-sm text-gray-500 truncate">
+                            {account.phoneNumber || 'Not connected'}
+                          </p>
+                        </div>
+
+                        {/* Status */}
+                        <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium ${status.bg} ${status.color} ${status.border} border`}>
+                          <StatusIcon className={`w-3.5 h-3.5 ${status.label.includes('Connecting') ? 'animate-spin' : ''}`} />
                           {status.label}
                         </div>
                       </div>
 
-                      <div className="flex gap-2">
+                      {/* Actions */}
+                      <div className="flex gap-2 mt-4 pt-3 border-t border-gray-800/50">
                         {account.clientStatus === 'DISCONNECTED' && (
                           <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              connectAccount(account.id);
-                            }}
-                            className="flex-1 py-2 bg-green-500/10 text-green-400 rounded-lg text-sm font-medium hover:bg-green-500/20 transition flex items-center justify-center gap-1"
+                            onClick={(e) => { e.stopPropagation(); connectAccount(account.id); }}
+                            className="flex-1 py-2 rounded-lg bg-green-500/10 text-green-400 text-sm font-medium hover:bg-green-500/20 transition flex items-center justify-center gap-2"
                           >
-                            <Link className="w-3 h-3" />
+                            <Link className="w-3.5 h-3.5" />
                             Connect
                           </button>
                         )}
 
                         {account.hasActiveClient && account.clientStatus !== 'DISCONNECTED' && (
                           <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              disconnectAccount(account.id);
-                            }}
-                            className="flex-1 py-2 bg-yellow-500/10 text-yellow-400 rounded-lg text-sm font-medium hover:bg-yellow-500/20 transition flex items-center justify-center gap-1"
+                            onClick={(e) => { e.stopPropagation(); disconnectAccount(account.id); }}
+                            className="flex-1 py-2 rounded-lg bg-amber-500/10 text-amber-400 text-sm font-medium hover:bg-amber-500/20 transition flex items-center justify-center gap-2"
                           >
-                            <LogOut className="w-3 h-3" />
+                            <WifiOff className="w-3.5 h-3.5" />
                             Disconnect
                           </button>
                         )}
 
                         <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            copyQRLink(account.id);
-                          }}
-                          className="px-3 py-2 bg-blue-500/10 text-blue-400 rounded-lg text-sm font-medium hover:bg-blue-500/20 transition flex items-center gap-1"
+                          onClick={(e) => { e.stopPropagation(); copyQRLink(account.id); }}
+                          className="p-2 rounded-lg bg-gray-800 text-gray-400 hover:text-white hover:bg-gray-700 transition"
                           title="Copy QR Link"
                         >
-                          <Copy className="w-3 h-3" />
+                          <Copy className="w-4 h-4" />
                         </button>
 
                         <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            deleteAccount(account.id);
-                          }}
-                          className="px-3 py-2 bg-red-500/10 text-red-400 rounded-lg text-sm font-medium hover:bg-red-500/20 transition flex items-center gap-1"
+                          onClick={(e) => { e.stopPropagation(); deleteAccount(account.id); }}
+                          className="p-2 rounded-lg bg-gray-800 text-gray-400 hover:text-red-400 hover:bg-red-500/10 transition"
                         >
-                          <Trash2 className="w-3 h-3" />
+                          <Trash2 className="w-4 h-4" />
                         </button>
                       </div>
                     </div>
@@ -617,156 +595,150 @@ export default function Dashboard() {
             )}
           </div>
 
-          {/* Account Details */}
-          <div className="bg-gray-900 border border-gray-800 rounded-xl p-6 backdrop-blur-sm">
-            <h2 className="text-xl font-semibold mb-4">Account Details</h2>
-
-            {!selectedAccount ? (
-              <div className="text-center py-12">
-                <div className="bg-gray-800 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-4">
-                  <Smartphone className="w-10 h-10 text-gray-600" />
+          {/* Account Details - 2 columns */}
+          <div className="lg:col-span-2">
+            <div className="glass rounded-xl p-5 sticky top-6">
+              {!selectedAccount ? (
+                <div className="text-center py-16">
+                  <div className="w-20 h-20 rounded-2xl bg-gray-800/50 flex items-center justify-center mx-auto mb-4">
+                    <Smartphone className="w-10 h-10 text-gray-600" />
+                  </div>
+                  <h3 className="text-lg font-medium mb-2">No Account Selected</h3>
+                  <p className="text-gray-500 text-sm">Select an account to view details</p>
                 </div>
-                <p className="text-gray-400">Select an account to view details</p>
-              </div>
-            ) : (
-              <div className="space-y-6">
-                {/* Info */}
-                <div className="space-y-3">
-                  <div>
-                    <p className="text-sm text-gray-500">Name</p>
-                    <p className="text-lg font-medium">{selectedAccount.name}</p>
-                  </div>
-                  <div>
-                    <p className="text-sm text-gray-500">ID</p>
-                    <p className="text-sm font-mono text-gray-400">{selectedAccount.id}</p>
-                  </div>
-                  {selectedAccount.phoneNumber && (
-                    <div>
-                      <p className="text-sm text-gray-500">Phone</p>
-                      <p className="text-lg font-medium">{selectedAccount.phoneNumber}</p>
+              ) : (
+                <div className="space-y-6">
+                  {/* Header */}
+                  <div className="flex items-start justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className={`w-14 h-14 rounded-xl flex items-center justify-center font-bold text-xl
+                        ${selectedAccount.clientStatus === 'CONNECTED' ? 'bg-green-500/10 text-green-400' : 'bg-gray-800 text-gray-400'}`}>
+                        {selectedAccount.name.charAt(0).toUpperCase()}
+                      </div>
+                      <div>
+                        <h3 className="font-bold text-lg">{selectedAccount.name}</h3>
+                        <p className="text-gray-500 text-sm">{selectedAccount.phoneNumber || 'Not linked'}</p>
+                      </div>
                     </div>
-                  )}
-                  <div>
-                    <p className="text-sm text-gray-500">Status</p>
-                    <div className="flex items-center gap-2 mt-1">
-                      {(() => {
-                        const s = getStatusConfig(selectedAccount.clientStatus);
-                        const Icon = s.icon;
-                        return (
-                          <>
-                            <div className={`p-1.5 rounded-full ${s.bg}`}>
-                              <Icon className={`w-4 h-4 ${s.color} ${s.label.includes('Connecting') ? 'animate-spin' : ''}`} />
-                            </div>
-                            <span className={`font-medium ${s.color}`}>{s.label}</span>
-                          </>
-                        );
-                      })()}
-                    </div>
+                    <button
+                      onClick={() => setSelectedAccount(null)}
+                      className="p-2 rounded-lg hover:bg-gray-800 text-gray-400 hover:text-white transition"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
                   </div>
+
+                  {/* Status */}
+                  {(() => {
+                    const s = getStatusConfig(selectedAccount.clientStatus);
+                    const Icon = s.icon;
+                    return (
+                      <div className={`flex items-center gap-3 p-3 rounded-xl ${s.bg} ${s.border} border`}>
+                        <Icon className={`w-5 h-5 ${s.color} ${s.label.includes('Connecting') ? 'animate-spin' : ''}`} />
+                        <div>
+                          <p className={`font-medium ${s.color}`}>{s.label}</p>
+                          <p className="text-xs text-gray-500">Current status</p>
+                        </div>
+                      </div>
+                    );
+                  })()}
 
                   {/* Rate Limits Toggle */}
-                  <div className="pt-3 border-t border-gray-800">
-                    <div className="flex items-center justify-between">
+                  <div className="flex items-center justify-between p-3 rounded-xl bg-gray-800/30 border border-gray-800">
+                    <div className="flex items-center gap-3">
+                      <Shield className={`w-5 h-5 ${selectedAccount.useLimits ? 'text-amber-400' : 'text-gray-500'}`} />
                       <div>
-                        <p className="text-sm text-gray-500">Rate Limits</p>
-                        <p className="text-xs text-gray-600 mt-0.5">
-                          {selectedAccount.useLimits ? 'Limited sending (safe)' : 'Unlimited sending'}
+                        <p className="font-medium">Rate Limits</p>
+                        <p className="text-xs text-gray-500">
+                          {selectedAccount.useLimits ? 'Safe mode enabled' : 'No restrictions'}
                         </p>
                       </div>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          toggleUseLimits(selectedAccount.id, selectedAccount.useLimits);
-                        }}
-                        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${selectedAccount.useLimits ? 'bg-yellow-500' : 'bg-green-500'
-                          }`}
-                      >
-                        <span
-                          className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${selectedAccount.useLimits ? 'translate-x-6' : 'translate-x-1'
-                            }`}
-                        />
-                      </button>
                     </div>
+                    <button
+                      onClick={() => toggleUseLimits(selectedAccount.id, selectedAccount.useLimits)}
+                      className={`relative w-12 h-7 rounded-full transition-colors ${selectedAccount.useLimits ? 'bg-amber-500' : 'bg-gray-700'}`}
+                    >
+                      <span className={`absolute top-1 w-5 h-5 bg-white rounded-full transition-transform ${selectedAccount.useLimits ? 'left-6' : 'left-1'}`} />
+                    </button>
+                  </div>
+
+                  {/* QR Code */}
+                  {selectedAccount.qrCode && (
+                    <div className="bg-black/50 rounded-xl p-4 text-center border border-gray-800">
+                      <div className="flex items-center justify-between mb-4">
+                        <h4 className="font-semibold flex items-center gap-2 text-sm">
+                          <QrCode className="w-4 h-4 text-amber-400" />
+                          Scan to Connect
+                        </h4>
+                        <button
+                          onClick={() => regenerateQR(selectedAccount.id)}
+                          disabled={regeneratingQR}
+                          className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-800 rounded-lg text-xs text-gray-400 hover:text-white transition disabled:opacity-50"
+                        >
+                          <RefreshCw className={`w-3 h-3 ${regeneratingQR ? 'animate-spin' : ''}`} />
+                          Refresh
+                        </button>
+                      </div>
+                      <div className="inline-block p-3 bg-white rounded-xl">
+                        <img src={selectedAccount.qrCode} alt="QR Code" className="w-44 h-44" />
+                      </div>
+                      <p className="text-xs text-gray-500 mt-3">
+                        WhatsApp &rarr; Settings &rarr; Linked Devices
+                      </p>
+                    </div>
+                  )}
+
+                  {/* Send Message */}
+                  {selectedAccount.clientStatus === 'CONNECTED' && (
+                    <div className="space-y-3">
+                      <h4 className="font-semibold flex items-center gap-2 text-sm">
+                        <Send className="w-4 h-4 text-green-400" />
+                        Send Message
+                      </h4>
+                      <form onSubmit={sendMessage} className="space-y-3">
+                        <input
+                          type="text"
+                          name="to"
+                          placeholder="Phone number (e.g. 1234567890)"
+                          required
+                          className="w-full px-4 py-3 bg-black/50 border border-gray-800 rounded-xl text-white placeholder-gray-600 focus:outline-none focus:border-green-500/50 transition text-sm"
+                        />
+                        <textarea
+                          name="message"
+                          placeholder="Type your message..."
+                          required
+                          rows={3}
+                          className="w-full px-4 py-3 bg-black/50 border border-gray-800 rounded-xl text-white placeholder-gray-600 focus:outline-none focus:border-green-500/50 transition resize-none text-sm"
+                        />
+                        <button
+                          type="submit"
+                          disabled={sending}
+                          className="w-full py-3 bg-gradient-to-r from-green-500 to-emerald-600 text-white rounded-xl font-medium hover:shadow-lg hover:shadow-green-500/20 disabled:opacity-50 transition-all duration-300 flex items-center justify-center gap-2"
+                        >
+                          {sending ? (
+                            <>
+                              <Loader2 className="w-4 h-4 animate-spin" />
+                              Sending...
+                            </>
+                          ) : (
+                            <>
+                              <Send className="w-4 h-4" />
+                              Send
+                            </>
+                          )}
+                        </button>
+                      </form>
+                    </div>
+                  )}
+
+                  {/* Account ID */}
+                  <div className="pt-3 border-t border-gray-800">
+                    <p className="text-xs text-gray-600">Account ID</p>
+                    <p className="text-xs font-mono text-gray-500 truncate">{selectedAccount.id}</p>
                   </div>
                 </div>
-
-                {/* QR Code */}
-                {selectedAccount.qrCode && (
-                  <div className="bg-black/50 border border-gray-800 rounded-xl p-6 text-center">
-                    <div className="flex items-center justify-between mb-4">
-                      <h4 className="font-semibold flex items-center gap-2">
-                        <QrCode className="w-5 h-5" />
-                        Scan to Connect
-                      </h4>
-                      <button
-                        onClick={() => regenerateQR(selectedAccount.id)}
-                        disabled={regeneratingQR}
-                        className="flex items-center gap-2 px-3 py-1.5 bg-blue-500/10 text-blue-400 rounded-lg text-sm font-medium hover:bg-blue-500/20 transition disabled:opacity-50 disabled:cursor-not-allowed"
-                      >
-                        <RefreshCw className={`w-3.5 h-3.5 ${regeneratingQR ? 'animate-spin' : ''}`} />
-                        {regeneratingQR ? 'Regenerating...' : 'Regenerate'}
-                      </button>
-                    </div>
-                    <div className="inline-block p-4 bg-white rounded-xl">
-                      <img
-                        src={selectedAccount.qrCode}
-                        alt="QR Code"
-                        className="w-48 h-48"
-                      />
-                    </div>
-                    <p className="text-sm text-gray-400 mt-3">
-                      Open WhatsApp → Settings → Linked Devices → Link a Device
-                    </p>
-                    <p className="text-xs text-gray-500 mt-2">
-                      QR code expired? Click "Regenerate" to get a new one
-                    </p>
-                  </div>
-                )}
-
-                {/* Send Message */}
-                {selectedAccount.clientStatus === 'CONNECTED' && (
-                  <div>
-                    <h4 className="font-semibold mb-4 flex items-center gap-2">
-                      <Send className="w-5 h-5" />
-                      Send Message
-                    </h4>
-                    <form onSubmit={sendMessage} className="space-y-4">
-                      <input
-                        type="text"
-                        name="to"
-                        placeholder="Recipient phone (e.g. 1234567890)"
-                        required
-                        className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-white/20 focus:border-white/50 transition"
-                      />
-                      <textarea
-                        name="message"
-                        placeholder="Type your message..."
-                        required
-                        rows={4}
-                        className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-white/20 focus:border-white/50 transition resize-none"
-                      />
-                      <button
-                        type="submit"
-                        disabled={sending}
-                        className="w-full py-3 bg-white text-black rounded-lg font-medium hover:bg-gray-200 disabled:bg-gray-800 disabled:text-gray-500 transition flex items-center justify-center gap-2"
-                      >
-                        {sending ? (
-                          <>
-                            <Loader2 className="w-4 h-4 animate-spin" />
-                            Sending...
-                          </>
-                        ) : (
-                          <>
-                            <Send className="w-4 h-4" />
-                            Send Message
-                          </>
-                        )}
-                      </button>
-                    </form>
-                  </div>
-                )}
-              </div>
-            )}
+              )}
+            </div>
           </div>
         </div>
       </div>
