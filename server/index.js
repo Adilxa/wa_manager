@@ -77,10 +77,11 @@ const CONFIG = {
   DAILY_NEW_CHATS_LIMIT: 100,
 
   // Memory management - CRITICAL FOR 100+ USERS
+  // Thresholds are percentage of MAX_HEAP (8GB), not current heap
   MEMORY_CHECK_INTERVAL: 30000, // Check every 30 seconds
-  MEMORY_WARNING_THRESHOLD: 0.70, // Warn at 70%
-  MEMORY_CRITICAL_THRESHOLD: 0.80, // Critical at 80%
-  MEMORY_EMERGENCY_THRESHOLD: 0.90, // Emergency at 90%
+  MEMORY_WARNING_THRESHOLD: 0.50, // Warn at 50% of 8GB = 4GB
+  MEMORY_CRITICAL_THRESHOLD: 0.70, // Critical at 70% of 8GB = 5.6GB
+  MEMORY_EMERGENCY_THRESHOLD: 0.85, // Emergency at 85% of 8GB = 6.8GB
 
   // Cleanup intervals
   CLEANUP_INTERVAL: 300000, // Cleanup every 5 minutes
@@ -606,15 +607,19 @@ function startMemoryMonitor() {
     clearInterval(memoryMonitorInterval);
   }
 
+  // Max heap size from NODE_OPTIONS (8GB = 8192MB)
+  const MAX_HEAP_MB = 8192;
+
   memoryMonitorInterval = setInterval(async () => {
     const used = process.memoryUsage();
-    const heapPercent = used.heapUsed / used.heapTotal;
     const heapUsedMB = Math.round(used.heapUsed / 1024 / 1024);
-    const heapTotalMB = Math.round(used.heapTotal / 1024 / 1024);
+    const rssMB = Math.round(used.rss / 1024 / 1024);
+    // Use RSS (actual memory) compared to max heap, not current heap
+    const heapPercent = rssMB / MAX_HEAP_MB;
 
-    // Emergency - disconnect clients to save memory
-    if (heapPercent > CONFIG.MEMORY_EMERGENCY_THRESHOLD) {
-      logger.error(`EMERGENCY: Memory at ${Math.round(heapPercent * 100)}% (${heapUsedMB}/${heapTotalMB}MB)`);
+    // Emergency - disconnect clients to save memory (only if using significant memory)
+    if (heapPercent > CONFIG.MEMORY_EMERGENCY_THRESHOLD && rssMB > 1000) {
+      logger.error(`EMERGENCY: Memory at ${rssMB}MB / ${MAX_HEAP_MB}MB (${Math.round(heapPercent * 100)}%)`);
 
       // Force GC multiple times
       forceGC();
@@ -644,9 +649,9 @@ function startMemoryMonitor() {
       cleanupMaps();
       signalKeyCache.clear();
     }
-    // Critical - cleanup and GC
-    else if (heapPercent > CONFIG.MEMORY_CRITICAL_THRESHOLD) {
-      logger.error(`CRITICAL: Memory at ${Math.round(heapPercent * 100)}% (${heapUsedMB}/${heapTotalMB}MB)`);
+    // Critical - cleanup and GC (only if using significant memory)
+    else if (heapPercent > CONFIG.MEMORY_CRITICAL_THRESHOLD && rssMB > 800) {
+      logger.error(`CRITICAL: Memory at ${rssMB}MB / ${MAX_HEAP_MB}MB (${Math.round(heapPercent * 100)}%)`);
       cleanupMaps();
       forceGC();
 
@@ -669,9 +674,9 @@ function startMemoryMonitor() {
         }
       }
     }
-    // Warning - just cleanup and GC
-    else if (heapPercent > CONFIG.MEMORY_WARNING_THRESHOLD) {
-      logger.warn(`WARNING: Memory at ${Math.round(heapPercent * 100)}% (${heapUsedMB}/${heapTotalMB}MB)`);
+    // Warning - just cleanup and GC (only if using significant memory)
+    else if (heapPercent > CONFIG.MEMORY_WARNING_THRESHOLD && rssMB > 500) {
+      logger.warn(`WARNING: Memory at ${rssMB}MB / ${MAX_HEAP_MB}MB (${Math.round(heapPercent * 100)}%)`);
       cleanupMaps();
       forceGC();
     }
