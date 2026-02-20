@@ -13,7 +13,7 @@ module.exports = {
         NODE_ENV: 'production',
         API_PORT: process.env.API_PORT || 5001,
         // Enable garbage collection with 8GB heap limit
-        NODE_OPTIONS: '--expose-gc --max-old-space-size=8192 --gc-interval=100',
+        NODE_OPTIONS: '--expose-gc --max-old-space-size=8192',
       },
       // Restart strategy
       min_uptime: '30s',
