@@ -607,8 +607,8 @@ function startMemoryMonitor() {
     clearInterval(memoryMonitorInterval);
   }
 
-  // Max heap size from NODE_OPTIONS (3GB = 3072MB for 50 clients)
-  const MAX_HEAP_MB = 3072;
+  // Max heap size from NODE_OPTIONS (5GB = 5120MB for 50+ clients)
+  const MAX_HEAP_MB = 5120;
 
   memoryMonitorInterval = setInterval(async () => {
     const used = process.memoryUsage();
@@ -618,7 +618,7 @@ function startMemoryMonitor() {
     const heapPercent = rssMB / MAX_HEAP_MB;
 
     // Emergency - disconnect clients to save memory (only if using significant memory)
-    if (heapPercent > CONFIG.MEMORY_EMERGENCY_THRESHOLD && rssMB > 2500) {
+    if (heapPercent > CONFIG.MEMORY_EMERGENCY_THRESHOLD && rssMB > 4300) {
       logger.error(`EMERGENCY: Memory at ${rssMB}MB / ${MAX_HEAP_MB}MB (${Math.round(heapPercent * 100)}%)`);
 
       // Force GC multiple times
@@ -650,7 +650,7 @@ function startMemoryMonitor() {
       signalKeyCache.clear();
     }
     // Critical - cleanup and GC (only if using significant memory)
-    else if (heapPercent > CONFIG.MEMORY_CRITICAL_THRESHOLD && rssMB > 2000) {
+    else if (heapPercent > CONFIG.MEMORY_CRITICAL_THRESHOLD && rssMB > 3500) {
       logger.error(`CRITICAL: Memory at ${rssMB}MB / ${MAX_HEAP_MB}MB (${Math.round(heapPercent * 100)}%)`);
       cleanupMaps();
       forceGC();
@@ -675,7 +675,7 @@ function startMemoryMonitor() {
       }
     }
     // Warning - just cleanup and GC (only if using significant memory)
-    else if (heapPercent > CONFIG.MEMORY_WARNING_THRESHOLD && rssMB > 1500) {
+    else if (heapPercent > CONFIG.MEMORY_WARNING_THRESHOLD && rssMB > 2500) {
       logger.warn(`WARNING: Memory at ${rssMB}MB / ${MAX_HEAP_MB}MB (${Math.round(heapPercent * 100)}%)`);
       cleanupMaps();
       forceGC();

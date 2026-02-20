@@ -97,10 +97,10 @@ services:
       resources:
         limits:
           cpus: "2.0"
-          memory: 4096M
+          memory: 6144M
         reservations:
           cpus: "0.5"
-          memory: 2048M
+          memory: 3072M
       # Политика перезапуска при сбое
       restart_policy:
         condition: on-failure

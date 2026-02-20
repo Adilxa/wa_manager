@@ -7,13 +7,13 @@ module.exports = {
       exec_mode: "fork",
       autorestart: true,
       watch: false,
-      // Restart only on memory limit - 3GB for 50 clients
-      max_memory_restart: "3200M",
+      // Restart only on memory limit - 5GB for 50+ clients
+      max_memory_restart: "5200M",
       env: {
         NODE_ENV: "production",
         API_PORT: process.env.API_PORT || 5001,
-        // Enable garbage collection - 3GB heap for 50 accounts
-        NODE_OPTIONS: "--expose-gc --max-old-space-size=3072",
+        // Enable garbage collection - 5GB heap for 50+ accounts
+        NODE_OPTIONS: "--expose-gc --max-old-space-size=5120",
       },
       // Restart strategy
       min_uptime: "10s",
