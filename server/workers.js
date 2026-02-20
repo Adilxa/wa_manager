@@ -1,13 +1,9 @@
 const { Worker } = require("bullmq");
-const { PrismaClient } = require("@prisma/client");
 const { contractQueue, messageQueue, redisConnection } = require("./queue");
 
-// Single Prisma instance with optimized settings
-const prisma = new PrismaClient({
-  log: ['error'],
-});
-
 // Shared state (you'll pass this from server/index.js)
+let prisma = null;
+let withDbRetry = null;
 let clients = null;
 let logger = null;
 let CONFIG = null;
@@ -20,6 +16,8 @@ let dailyLimits = null;
 
 // Initialize workers with dependencies
 function initializeWorkers(dependencies) {
+  prisma = dependencies.prisma;
+  withDbRetry = dependencies.withDbRetry;
   clients = dependencies.clients;
   logger = dependencies.logger;
   CONFIG = dependencies.CONFIG;
@@ -34,7 +32,7 @@ function initializeWorkers(dependencies) {
   startContractWorker();
   startMessageWorker();
 
-  logger.info("✅ BullMQ workers initialized");
+  logger.info("BullMQ workers initialized");
 }
 
 // Helper functions
@@ -56,16 +54,18 @@ function startContractWorker() {
       logger.info(`🔄 Processing contract job: ${contractId}`);
 
       try {
-        // Get contract from database
-        const contract = await prisma.contract.findUnique({
-          where: { id: contractId },
-          include: {
-            recipients: {
-              where: { status: { in: ["PENDING", "FAILED"] } },
-              orderBy: { createdAt: "asc" },
+        // Get contract from database with retry
+        const contract = await withDbRetry(() =>
+          prisma.contract.findUnique({
+            where: { id: contractId },
+            include: {
+              recipients: {
+                where: { status: { in: ["PENDING", "FAILED"] } },
+                orderBy: { createdAt: "asc" },
+              },
             },
-          },
-        });
+          })
+        );
 
         if (!contract) {
           throw new Error(`Contract ${contractId} not found`);

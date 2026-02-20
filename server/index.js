@@ -15,15 +15,123 @@ const {
   fetchLatestBaileysVersion,
 } = require("@whiskeysockets/baileys");
 
-// Prisma with connection pooling for high load
-const prisma = new PrismaClient({
-  log: ["error"],
-  datasources: {
-    db: {
-      url: process.env.DATABASE_URL,
+// ==================== PRISMA WITH AUTO-RECONNECT ====================
+
+let prisma = null;
+let prismaConnected = false;
+let prismaReconnectAttempts = 0;
+const MAX_PRISMA_RECONNECT_ATTEMPTS = 10;
+const PRISMA_RECONNECT_DELAY = 5000;
+const DB_HEALTH_CHECK_INTERVAL = 60000; // Check DB connection every minute
+
+function createPrismaClient() {
+  return new PrismaClient({
+    log: ["error"],
+    datasources: {
+      db: {
+        url: process.env.DATABASE_URL,
+      },
     },
-  },
-});
+  });
+}
+
+async function connectPrisma() {
+  try {
+    if (prisma) {
+      await prisma.$disconnect().catch(() => {});
+    }
+
+    prisma = createPrismaClient();
+
+    // Test connection
+    await prisma.$queryRaw`SELECT 1`;
+
+    prismaConnected = true;
+    prismaReconnectAttempts = 0;
+    console.log("[DB] PostgreSQL connected successfully");
+    return true;
+  } catch (error) {
+    prismaConnected = false;
+    console.error("[DB] PostgreSQL connection failed:", error.message);
+    return false;
+  }
+}
+
+async function reconnectPrisma() {
+  if (prismaReconnectAttempts >= MAX_PRISMA_RECONNECT_ATTEMPTS) {
+    console.error("[DB] Max reconnection attempts reached. Manual intervention required.");
+    return false;
+  }
+
+  prismaReconnectAttempts++;
+  console.log(`[DB] Attempting to reconnect (${prismaReconnectAttempts}/${MAX_PRISMA_RECONNECT_ATTEMPTS})...`);
+
+  const connected = await connectPrisma();
+
+  if (!connected) {
+    setTimeout(reconnectPrisma, PRISMA_RECONNECT_DELAY * prismaReconnectAttempts);
+  }
+
+  return connected;
+}
+
+// Wrapper for database operations with auto-retry
+async function withDbRetry(operation, maxRetries = 3) {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      if (!prismaConnected) {
+        await reconnectPrisma();
+      }
+      return await operation();
+    } catch (error) {
+      const isConnectionError =
+        error.message?.includes("Authentication failed") ||
+        error.message?.includes("Connection refused") ||
+        error.message?.includes("Connection closed") ||
+        error.message?.includes("Can't reach database") ||
+        error.code === "P1001" || // Can't reach database server
+        error.code === "P1002" || // Database server timed out
+        error.code === "P1008" || // Operations timed out
+        error.code === "P1017";   // Server closed the connection
+
+      if (isConnectionError) {
+        console.error(`[DB] Connection error on attempt ${attempt}:`, error.message);
+        prismaConnected = false;
+
+        if (attempt < maxRetries) {
+          await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+          await reconnectPrisma();
+          continue;
+        }
+      }
+
+      throw error;
+    }
+  }
+}
+
+// Periodic DB health check
+function startDbHealthCheck() {
+  setInterval(async () => {
+    try {
+      await prisma.$queryRaw`SELECT 1`;
+      if (!prismaConnected) {
+        prismaConnected = true;
+        prismaReconnectAttempts = 0;
+        console.log("[DB] Connection restored");
+      }
+    } catch (error) {
+      console.error("[DB] Health check failed:", error.message);
+      prismaConnected = false;
+      reconnectPrisma();
+    }
+  }, DB_HEALTH_CHECK_INTERVAL);
+
+  console.log(`[DB] Health check started (interval: ${DB_HEALTH_CHECK_INTERVAL / 1000}s)`);
+}
+
+// Initialize Prisma connection
+prisma = createPrismaClient();
 
 const app = express();
 
@@ -2075,7 +2183,18 @@ process.on("uncaughtException", error => {
   const errorMsg = error.message || "";
   const errorCode = error.code;
 
-  // Ignore recoverable errors
+  // Handle database connection errors
+  if (errorMsg.includes('Authentication failed') ||
+      errorMsg.includes("Can't reach database") ||
+      error.code === 'P1001' || error.code === 'P1002' ||
+      error.code === 'P1008' || error.code === 'P1017') {
+    logger.error(`[DB] Connection lost: ${errorMsg}`);
+    prismaConnected = false;
+    reconnectPrisma();
+    return;
+  }
+
+  // Ignore recoverable network errors
   if (errorCode === 'ETIMEDOUT' || errorCode === 'EPIPE' || errorCode === 'ECONNRESET' ||
       errorCode === 'ENOTFOUND' || errorCode === 'ECONNREFUSED' ||
       errorMsg.includes('EPIPE') || errorMsg.includes('ETIMEDOUT') ||
@@ -2091,6 +2210,17 @@ process.on("uncaughtException", error => {
 process.on("unhandledRejection", (reason) => {
   const errorMsg = reason?.message || "";
   const errorCode = reason?.code;
+
+  // Handle database connection errors
+  if (errorMsg.includes('Authentication failed') ||
+      errorMsg.includes("Can't reach database") ||
+      errorCode === 'P1001' || errorCode === 'P1002' ||
+      errorCode === 'P1008' || errorCode === 'P1017') {
+    logger.error(`[DB] Connection lost: ${errorMsg}`);
+    prismaConnected = false;
+    reconnectPrisma();
+    return;
+  }
 
   if (errorCode === 'ETIMEDOUT' || errorCode === 'EPIPE' || errorCode === 'ECONNRESET' ||
       errorMsg.includes('EPIPE') || errorMsg.includes('ETIMEDOUT') ||
@@ -2121,7 +2251,19 @@ const server = app.listen(PORT, async () => {
   logger.info(`WhatsApp API Server on port ${PORT}`);
   logger.info(`Max clients: ${CONFIG.MAX_CLIENTS}`);
 
+  // Connect to database first
+  const dbConnected = await connectPrisma();
+  if (!dbConnected) {
+    logger.error("Failed to connect to database on startup. Retrying...");
+    await reconnectPrisma();
+  }
+
+  // Start database health monitoring
+  startDbHealthCheck();
+
   initializeWorkers({
+    prisma,
+    withDbRetry,
     clients,
     logger,
     CONFIG,
@@ -2134,12 +2276,14 @@ const server = app.listen(PORT, async () => {
   });
 
   try {
-    const updated = await prisma.whatsAppAccount.updateMany({
-      where: {
-        status: { in: ["CONNECTING", "QR_READY", "AUTHENTICATING"] },
-      },
-      data: { status: "DISCONNECTED", qrCode: null },
-    });
+    const updated = await withDbRetry(() =>
+      prisma.whatsAppAccount.updateMany({
+        where: {
+          status: { in: ["CONNECTING", "QR_READY", "AUTHENTICATING"] },
+        },
+        data: { status: "DISCONNECTED", qrCode: null },
+      })
+    );
 
     if (updated.count > 0) {
       logger.info(`Reset ${updated.count} stuck accounts`);
