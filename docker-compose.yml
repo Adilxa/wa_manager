@@ -3,6 +3,8 @@ services:
     image: postgres:16-alpine
     container_name: wa-postgres
     restart: unless-stopped
+    ports:
+      - "5433:5432"
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
@@ -10,6 +12,15 @@ services:
       PGDATA: /var/lib/postgresql/data/pgdata
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    # PostgreSQL configuration for stable long-running connections
+    command: >
+      postgres
+      -c tcp_keepalives_idle=60
+      -c tcp_keepalives_interval=10
+      -c tcp_keepalives_count=6
+      -c idle_in_transaction_session_timeout=0
+      -c statement_timeout=0
+      -c log_disconnections=on
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 10s
@@ -20,6 +31,8 @@ services:
     image: redis:7-alpine
     container_name: wa-redis
     restart: unless-stopped
+    ports:
+      - "6379:6379"
     volumes:
       - redis_data:/data
     command: >

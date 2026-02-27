@@ -61,5 +61,37 @@ module.exports = {
       // Graceful shutdown
       kill_timeout: 30000,
     },
+    {
+      name: "services-monitor",
+      script: "server/monitor.js",
+      instances: 1,
+      exec_mode: "fork",
+      autorestart: true,
+      watch: false,
+      max_memory_restart: "256M",
+      env: {
+        NODE_ENV: "production",
+        TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN,
+        TELEGRAM_CHAT_ID: process.env.TELEGRAM_CHAT_ID || "-1003128708715",
+        REDIS_HOST: process.env.REDIS_HOST || "localhost",
+        REDIS_PORT: process.env.REDIS_PORT || 6379,
+        REDIS_PASSWORD: process.env.REDIS_PASSWORD,
+      },
+      // Restart settings
+      restart_delay: 10000,
+      max_restarts: 20,
+      min_uptime: "30s",
+      // Exponential backoff
+      exp_backoff_restart_delay: 500,
+      // Logging
+      error_file: "./logs/monitor-error.log",
+      out_file: "./logs/monitor-out.log",
+      log_date_format: "YYYY-MM-DD HH:mm:ss Z",
+      merge_logs: true,
+      // Graceful shutdown
+      kill_timeout: 15000,
+      listen_timeout: 5000,
+      shutdown_with_message: true,
+    },
   ],
 };
