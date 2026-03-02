@@ -249,7 +249,8 @@ function startMessageWorker() {
         if (phoneNumber.includes("@lid") || phoneNumber.includes("@s.whatsapp.net") || phoneNumber.includes("@g.us")) {
           // Already formatted - use as is
           jid = phoneNumber;
-          cleanPhone = phoneNumber.split("@")[0];
+          // Extract number: remove @suffix and device id if present (e.g., "77001234567:123@s.whatsapp.net" -> "77001234567")
+          cleanPhone = phoneNumber.split("@")[0].split(":")[0];
         } else {
           // Clean phone number and format as regular user
           cleanPhone = phoneNumber.replace(/[^0-9]/g, '');

@@ -971,12 +971,26 @@ async function processMessageQueue(accountId) {
   const msg = queue[0];
 
   try {
+    // Support all JID formats: @s.whatsapp.net, @lid, @g.us
     let jid = msg.to;
     if (!msg.to.includes("@")) {
+      // Plain number - default to regular WhatsApp
       jid = `${msg.to}@s.whatsapp.net`;
+    } else if (msg.to.includes("@lid")) {
+      // LID format - use as is
+      jid = msg.to;
+    } else if (msg.to.includes("@g.us")) {
+      // Group - use as is
+      jid = msg.to;
+    } else if (msg.to.includes("@s.whatsapp.net")) {
+      // Regular user - use as is
+      jid = msg.to;
     }
 
     await sendMessageWithHumanBehavior(accountId, jid, msg.message);
+
+    // Extract contact number from JID (remove @suffix and device id)
+    const contactNumber = jid.split("@")[0].split(":")[0];
 
     // Save to database
     await prisma.message.create({
@@ -985,9 +999,9 @@ async function processMessageQueue(accountId) {
         chatId: jid,
         direction: "OUTGOING",
         message: msg.message,
-        to: msg.to,
+        to: contactNumber,
         status: "SENT",
-        contactNumber: msg.to,
+        contactNumber,
       },
     });
 
@@ -1230,8 +1244,26 @@ async function initializeClient(accountId) {
           if (!messageText) continue;
 
           const chatId = msg.key.remoteJid;
-          const contactNumber = chatId.split("@")[0];
           const isFromMe = msg.key.fromMe;
+          const isGroup = chatId.endsWith("@g.us");
+
+          // For groups, get the actual sender from participant
+          // participant can be: "77001234567@s.whatsapp.net" or "77001234567:123@s.whatsapp.net" (with device id)
+          // or LID format: "123456789@lid"
+          let senderJid = null;
+          let senderNumber = null;
+
+          if (isGroup && !isFromMe) {
+            // Get participant (actual sender in group)
+            senderJid = msg.key.participant || msg.participant;
+            if (senderJid) {
+              // Extract number: remove @s.whatsapp.net or @lid, and device id if present
+              senderNumber = senderJid.split("@")[0].split(":")[0];
+            }
+          }
+
+          // For direct chats or outgoing messages, use chatId
+          const contactNumber = senderNumber || chatId.split("@")[0];
 
           await prisma.message.create({
             data: {
@@ -1239,13 +1271,18 @@ async function initializeClient(accountId) {
               chatId,
               direction: isFromMe ? "OUTGOING" : "INCOMING",
               message: messageText,
-              to: isFromMe ? contactNumber : null,
+              to: isFromMe ? chatId.split("@")[0] : null,
               from: isFromMe ? null : contactNumber,
               status: isFromMe ? "SENT" : "RECEIVED",
               contactNumber,
               contactName: msg.pushName || null,
             },
           });
+
+          // Log for debugging group messages
+          if (isGroup) {
+            logger.debug(`Group msg in ${chatId} from ${senderJid} (${contactNumber}): ${messageText.substring(0, 50)}`);
+          }
         } catch (error) {
           logger.error(`Failed to save message for ${accountId}:`, error.message);
         }
