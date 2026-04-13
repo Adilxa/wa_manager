@@ -945,10 +945,16 @@ async function sendMessageWithHumanBehavior(accountId, jid, message) {
 
 async function processMessageQueue(accountId) {
   const queue = messageQueues.get(accountId);
-  if (!queue || queue.length === 0) return;
+  if (!queue || queue.length === 0) {
+    logger.debug(`[Queue ${accountId}] Queue is empty or doesn't exist`);
+    return;
+  }
+
+  logger.info(`[Queue ${accountId}] Processing queue, ${queue.length} messages pending`);
 
   const clientInfo = clients.get(accountId);
   if (!clientInfo || clientInfo.status !== "CONNECTED") {
+    logger.warn(`[Queue ${accountId}] Client not connected (status: ${clientInfo?.status || 'NO_CLIENT'}), retrying in 10s`);
     setTimeout(() => processMessageQueue(accountId), 10000);
     return;
   }
@@ -959,28 +965,35 @@ async function processMessageQueue(accountId) {
     if (counter && !counter.isResting) {
       counter.isResting = true;
       const restDuration = randomDelay(CONFIG.REST_DURATION_MIN, CONFIG.REST_DURATION_MAX);
-      logger.info(`Account ${accountId} resting for ${Math.round(restDuration / 1000)}s`);
+      logger.info(`[Queue ${accountId}] Account needs rest for ${Math.round(restDuration / 1000)}s`);
 
       setTimeout(() => {
         counter.isResting = false;
         counter.count = 0;
         processMessageQueue(accountId);
       }, restDuration);
+    } else {
+      logger.debug(`[Queue ${accountId}] Already resting, skipping`);
     }
     return;
   }
 
   const rateCheck = await checkRateLimit(accountId);
   if (!rateCheck.allowed && !rateCheck.noLimits) {
+    logger.warn(`[Queue ${accountId}] Rate limit reached, retrying in ${rateCheck.resetIn}s`);
     setTimeout(() => processMessageQueue(accountId), rateCheck.resetIn * 1000);
     return;
   }
 
   const dailyCheck = await checkDailyLimit(accountId);
   if (!dailyCheck.allowed && !dailyCheck.noLimits) {
+    logger.warn(`[Queue ${accountId}] Daily limit reached (${dailyCheck.current}/${dailyCheck.limit}), retrying in 1h`);
     setTimeout(() => processMessageQueue(accountId), 3600000);
     return;
   }
+
+  logger.info(`[Queue ${accountId}] All checks passed, sending message to ${queue[0].to}`);
+
 
   const msg = queue[0];
 
@@ -1001,7 +1014,9 @@ async function processMessageQueue(accountId) {
       jid = msg.to;
     }
 
+    logger.info(`[Queue ${accountId}] Sending message to ${jid}...`);
     await sendMessageWithHumanBehavior(accountId, jid, msg.message);
+    logger.info(`[Queue ${accountId}] Message sent successfully to ${jid}`);
 
     // Extract contact number from JID (remove @suffix and device id)
     const contactNumber = jid.split("@")[0].split(":")[0];
@@ -1018,6 +1033,7 @@ async function processMessageQueue(accountId) {
         contactNumber,
       },
     });
+    logger.debug(`[Queue ${accountId}] Message saved to database`);
 
     // Update counters
     const limits = dailyLimits.get(accountId);
@@ -1027,6 +1043,7 @@ async function processMessageQueue(accountId) {
     if (counter) counter.count++;
 
     queue.shift();
+    logger.info(`[Queue ${accountId}] Message removed from queue, ${queue.length} remaining`);
 
     // Process next
     if (queue.length > 0) {
@@ -1036,36 +1053,47 @@ async function processMessageQueue(accountId) {
       });
 
       if (account && !account.useLimits) {
+        logger.info(`[Queue ${accountId}] Processing next message immediately (no limits)`);
         setTimeout(() => processMessageQueue(accountId), 100);
       } else {
         const nextDelay = randomDelay(CONFIG.DELAY_BETWEEN_MESSAGES_MIN, CONFIG.DELAY_BETWEEN_MESSAGES_MAX);
+        logger.info(`[Queue ${accountId}] Processing next message in ${Math.round(nextDelay / 1000)}s`);
         setTimeout(() => processMessageQueue(accountId), nextDelay);
       }
+    } else {
+      logger.info(`[Queue ${accountId}] Queue is now empty`);
     }
   } catch (error) {
-    logger.error(`Failed to send message from ${accountId}:`, error.message);
+    logger.error(`[Queue ${accountId}] Failed to send message:`, error.message, error.stack);
 
-    msg.retries++;
+    const msg = queue[0];
+    if (msg) {
+      msg.retries = (msg.retries || 0) + 1;
 
-    if (msg.retries >= CONFIG.MESSAGE_RETRY_COUNT) {
-      await prisma.message.create({
-        data: {
-          accountId,
-          message: msg.message,
-          to: msg.to,
-          direction: "OUTGOING",
-          status: "FAILED",
-          contactNumber: msg.to,
-        },
-      });
+      if (msg.retries >= CONFIG.MESSAGE_RETRY_COUNT) {
+        logger.error(`[Queue ${accountId}] Message failed after ${msg.retries} retries, marking as FAILED`);
 
-      queue.shift();
+        await prisma.message.create({
+          data: {
+            accountId,
+            message: msg.message,
+            to: msg.to,
+            direction: "OUTGOING",
+            status: "FAILED",
+            contactNumber: msg.to,
+          },
+        });
 
-      if (queue.length > 0) {
-        setTimeout(() => processMessageQueue(accountId), 2000);
+        queue.shift();
+
+        if (queue.length > 0) {
+          logger.info(`[Queue ${accountId}] Retrying next message in 2s`);
+          setTimeout(() => processMessageQueue(accountId), 2000);
+        }
+      } else {
+        logger.warn(`[Queue ${accountId}] Retrying message (attempt ${msg.retries}/${CONFIG.MESSAGE_RETRY_COUNT}) in ${CONFIG.MESSAGE_RETRY_DELAY / 1000}s`);
+        setTimeout(() => processMessageQueue(accountId), CONFIG.MESSAGE_RETRY_DELAY);
       }
-    } else {
-      setTimeout(() => processMessageQueue(accountId), CONFIG.MESSAGE_RETRY_DELAY);
     }
   }
 }
