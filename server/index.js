@@ -899,8 +899,11 @@ function enqueueMessage(accountId, to, message) {
 }
 
 async function sendMessageWithHumanBehavior(accountId, jid, message) {
+  logger.debug(`[sendMessage] Starting for ${accountId} to ${jid}`);
+
   const clientInfo = clients.get(accountId);
   if (!clientInfo || clientInfo.status !== "CONNECTED") {
+    logger.error(`[sendMessage] Client not connected for ${accountId}, status: ${clientInfo?.status || 'NO_CLIENT'}`);
     throw new Error("Client not connected");
   }
 
@@ -911,19 +914,31 @@ async function sendMessageWithHumanBehavior(accountId, jid, message) {
 
   // No limits - send immediately
   if (account && !account.useLimits) {
-    const sentMessage = await clientInfo.sock.sendMessage(jid, { text: message });
-    clientInfo.lastActivity = Date.now();
-    return sentMessage;
+    logger.info(`[sendMessage] Sending immediately (no limits) to ${jid}`);
+    try {
+      const sentMessage = await Promise.race([
+        clientInfo.sock.sendMessage(jid, { text: message }),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Send timeout')), 30000))
+      ]);
+      clientInfo.lastActivity = Date.now();
+      logger.info(`[sendMessage] Message sent successfully to ${jid}`);
+      return sentMessage;
+    } catch (error) {
+      logger.error(`[sendMessage] Failed to send to ${jid}:`, error.message, error.stack);
+      throw error;
+    }
   }
 
   // With limits - human-like behavior
+  logger.debug(`[sendMessage] Using human-like behavior for ${jid}`);
   const delayBeforeTyping = randomDelay(CONFIG.DELAY_BEFORE_TYPING_MIN, CONFIG.DELAY_BEFORE_TYPING_MAX);
   await sleep(delayBeforeTyping);
 
   try {
     await clientInfo.sock.sendPresenceUpdate("composing", jid);
+    logger.debug(`[sendMessage] Presence composing sent to ${jid}`);
   } catch (err) {
-    // Ignore presence errors
+    logger.warn(`[sendMessage] Failed to send composing presence to ${jid}:`, err.message);
   }
 
   const typingDuration = calculateTypingDelay(message);
@@ -931,16 +946,26 @@ async function sendMessageWithHumanBehavior(accountId, jid, message) {
 
   try {
     await clientInfo.sock.sendPresenceUpdate("paused", jid);
+    logger.debug(`[sendMessage] Presence paused sent to ${jid}`);
   } catch (err) {
-    // Ignore presence errors
+    logger.warn(`[sendMessage] Failed to send paused presence to ${jid}:`, err.message);
   }
 
   await sleep(randomDelay(200, 800));
 
-  const sentMessage = await clientInfo.sock.sendMessage(jid, { text: message });
-  clientInfo.lastActivity = Date.now();
-
-  return sentMessage;
+  logger.info(`[sendMessage] Actually sending message to ${jid}...`);
+  try {
+    const sentMessage = await Promise.race([
+      clientInfo.sock.sendMessage(jid, { text: message }),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('Send timeout after 30s')), 30000))
+    ]);
+    clientInfo.lastActivity = Date.now();
+    logger.info(`[sendMessage] Message sent successfully to ${jid}`);
+    return sentMessage;
+  } catch (error) {
+    logger.error(`[sendMessage] Failed to send to ${jid}:`, error.message, error.stack);
+    throw error;
+  }
 }
 
 async function processMessageQueue(accountId) {
