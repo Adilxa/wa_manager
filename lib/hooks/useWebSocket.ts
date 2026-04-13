@@ -220,13 +220,29 @@ export function useChats(accountId: string | null) {
 
   const sendMessage = useCallback(
     async (to: string, message: string) => {
-      if (!accountId) throw new Error('No account selected');
-
-      const response = await chatsSocket.send(accountId, to, message);
-      if (!response.success) {
-        throw new Error(response.error || 'Failed to send message');
+      if (!accountId) {
+        console.error('[useChats] No account selected');
+        throw new Error('No account selected');
       }
-      return response;
+
+      console.log('[useChats] Sending message:', { accountId, to, messageLength: message.length });
+
+      try {
+        const response = await chatsSocket.send(accountId, to, message);
+
+        console.log('[useChats] Send response:', response);
+
+        if (!response.success) {
+          const error = response.error || 'Failed to send message';
+          console.error('[useChats] Send failed:', error);
+          throw new Error(error);
+        }
+
+        return response;
+      } catch (error: any) {
+        console.error('[useChats] Send error:', error);
+        throw error;
+      }
     },
     [accountId]
   );

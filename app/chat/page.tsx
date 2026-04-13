@@ -16,6 +16,7 @@ import {
   MessageCircle,
   User,
   Loader2,
+  AlertCircle,
 } from 'lucide-react';
 import { useAccounts, useChats, useChatMessages } from '@/lib/hooks/useWebSocket';
 
@@ -88,23 +89,52 @@ export default function ChatPage() {
 
     if (!newMessage.trim() || !selectedChat || !selectedAccount) {
       if (!newMessage.trim()) {
-        alert('⚠️ Please enter a message');
+        console.warn('[Chat] Cannot send empty message');
       }
       return;
     }
 
+    // Check account status
+    const accountStatus = selectedAccount.clientStatus || selectedAccount.status;
+    if (accountStatus !== 'CONNECTED') {
+      alert(`⚠️ Account is ${accountStatus}. Please wait for connection or reconnect.`);
+      return;
+    }
+
     setSending(true);
+    const messageText = newMessage.trim();
+    const contactNumber = selectedChat.contactNumber;
+
+    console.log('[Chat] Sending message:', {
+      accountId: selectedAccount.id,
+      accountName: selectedAccount.name,
+      accountStatus,
+      to: contactNumber,
+      messageLength: messageText.length,
+    });
 
     try {
-      // Send via WebSocket
-      const contactNumber = selectedChat.contactNumber;
-      await sendMessageWS(contactNumber, newMessage.trim());
-
-      // Clear input
+      // Clear input immediately for better UX
       setNewMessage('');
+
+      // Send via WebSocket
+      const result = await sendMessageWS(contactNumber, messageText);
+
+      console.log('[Chat] Message sent successfully:', result);
+
+      // Show success feedback
+      if (result.queued) {
+        console.info(`[Chat] ✅ Message queued (position: ${result.queuePosition})`);
+      }
     } catch (error: any) {
-      console.error('Failed to send message:', error);
-      alert(`❌ ${error.message || 'Failed to send message. Please try again.'}`);
+      console.error('[Chat] ❌ Failed to send message:', error);
+
+      // Restore message on error
+      setNewMessage(messageText);
+
+      // Show detailed error to user
+      const errorMsg = error.message || 'Failed to send message';
+      alert(`❌ Send Error\n\n${errorMsg}\n\nAccount: ${selectedAccount.name}\nStatus: ${accountStatus}\n\nPlease try again or check logs.`);
     } finally {
       setSending(false);
     }
@@ -302,8 +332,14 @@ export default function ChatPage() {
                   <h3 className="font-semibold text-white">
                     {selectedChat.contactName}
                   </h3>
-                  <p className="text-xs text-gray-400">
+                  <p className="text-xs text-gray-400 flex items-center gap-2">
                     {selectedChat.contactNumber}
+                    {selectedAccount && (
+                      <span className="flex items-center gap-1">
+                        <span className="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse"></span>
+                        <span className="text-green-400">via {selectedAccount.name}</span>
+                      </span>
+                    )}
                   </p>
                 </div>
               </div>
@@ -397,16 +433,38 @@ export default function ChatPage() {
 
             {/* Message Input */}
             <div className="bg-gray-800 border-t border-gray-700 p-4">
+              {/* Account status warning */}
+              {selectedAccount && (selectedAccount.clientStatus || selectedAccount.status) !== 'CONNECTED' && (
+                <div className="mb-2 px-3 py-2 bg-amber-500/10 border border-amber-500/30 rounded-lg">
+                  <div className="flex items-center gap-2 text-amber-400 text-sm">
+                    <AlertCircle className="w-4 h-4" />
+                    <span>Account {selectedAccount.name} is {selectedAccount.clientStatus || selectedAccount.status}. Messages may not send.</span>
+                  </div>
+                </div>
+              )}
+
+              {/* Status indicator */}
+              {sending && (
+                <div className="mb-2 px-3 py-2 bg-blue-500/10 border border-blue-500/30 rounded-lg">
+                  <div className="flex items-center gap-2 text-blue-400 text-sm">
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span>Sending message...</span>
+                  </div>
+                </div>
+              )}
+
               <form onSubmit={sendMessage} className="flex items-center gap-3">
                 <button
                   type="button"
                   className="p-2 hover:bg-gray-700 rounded-lg transition"
+                  disabled={sending}
                 >
                   <Smile className="w-6 h-6 text-gray-400" />
                 </button>
                 <button
                   type="button"
                   className="p-2 hover:bg-gray-700 rounded-lg transition"
+                  disabled={sending}
                 >
                   <Paperclip className="w-6 h-6 text-gray-400" />
                 </button>
@@ -414,14 +472,15 @@ export default function ChatPage() {
                   type="text"
                   value={newMessage}
                   onChange={(e) => setNewMessage(e.target.value)}
-                  placeholder="Type a message"
+                  placeholder={sending ? "Sending..." : "Type a message"}
                   disabled={sending}
-                  className="flex-1 px-4 py-3 bg-gray-700 border border-gray-600 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-green-500 disabled:opacity-50"
+                  className="flex-1 px-4 py-3 bg-gray-700 border border-gray-600 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-green-500 disabled:opacity-50 disabled:cursor-not-allowed"
                 />
                 <button
                   type="submit"
                   disabled={!newMessage.trim() || sending}
                   className="p-3 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:bg-gray-700 disabled:text-gray-500 disabled:cursor-not-allowed transition"
+                  title={sending ? "Sending..." : "Send message"}
                 >
                   {sending ? (
                     <Loader2 className="w-6 h-6 animate-spin" />
