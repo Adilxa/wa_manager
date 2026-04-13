@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useRef, useCallback } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Send,
@@ -17,6 +17,7 @@ import {
   User,
   Loader2,
 } from 'lucide-react';
+import { useAccounts, useChats, useChatMessages } from '@/lib/hooks/useWebSocket';
 
 interface Account {
   id: string;
@@ -33,39 +34,27 @@ interface Chat {
   lastMessageTime: string;
   unreadCount: number;
   direction: string;
+  messages?: any[];
 }
-
-interface Message {
-  id: string;
-  direction: string;
-  message: string;
-  sentAt: string;
-  status: string;
-  contactName?: string;
-}
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
 
 export default function ChatPage() {
   const router = useRouter();
-  const [accounts, setAccounts] = useState<Account[]>([]);
   const [selectedAccount, setSelectedAccount] = useState<Account | null>(null);
-  const [chats, setChats] = useState<Chat[]>([]);
   const [selectedChat, setSelectedChat] = useState<Chat | null>(null);
-  const [messages, setMessages] = useState<Message[]>([]);
   const [newMessage, setNewMessage] = useState('');
-  const [loading, setLoading] = useState(true);
-  const [sending, setSending] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [sending, setSending] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // Refs для предотвращения множественных запросов
-  const chatsIntervalRef = useRef<NodeJS.Timeout | null>(null);
-  const messagesIntervalRef = useRef<NodeJS.Timeout | null>(null);
-  const isLoadingChatsRef = useRef(false);
-  const isLoadingMessagesRef = useRef(false);
+  // WebSocket hooks
+  const { accounts, loading } = useAccounts();
+  const { chats, sendMessage: sendMessageWS } = useChats(selectedAccount?.id || null);
+  const { messages } = useChatMessages(selectedAccount?.id || null, selectedChat?.chatId || null);
 
-  // Проверка авторизации
+  // Filter connected accounts
+  const connectedAccounts = accounts.filter((acc: Account) => acc.status === 'CONNECTED' || acc.clientStatus === 'CONNECTED');
+
+  // Check authentication
   useEffect(() => {
     const isAuth = localStorage.getItem('wa_manager_auth');
     if (!isAuth) {
@@ -73,65 +62,12 @@ export default function ChatPage() {
     }
   }, [router]);
 
-  // Загрузка аккаунтов
+  // Auto-select first connected account
   useEffect(() => {
-    loadAccounts();
-  }, []);
-
-  // Загрузка чатов при выборе аккаунта
-  useEffect(() => {
-    // Очищаем предыдущий интервал
-    if (chatsIntervalRef.current) {
-      clearInterval(chatsIntervalRef.current);
-      chatsIntervalRef.current = null;
+    if (connectedAccounts.length > 0 && !selectedAccount) {
+      setSelectedAccount(connectedAccounts[0]);
     }
-
-    if (!selectedAccount) return;
-
-    const accountId = selectedAccount.id;
-
-    // Загружаем чаты сразу
-    loadChats(accountId);
-
-    // Создаем интервал для обновления
-    const interval = setInterval(() => {
-      loadChats(accountId);
-    }, 5000);
-
-    chatsIntervalRef.current = interval;
-
-    return () => {
-      if (interval) clearInterval(interval);
-    };
-  }, [selectedAccount?.id]);
-
-  // Загрузка сообщений при выборе чата
-  useEffect(() => {
-    // Очищаем предыдущий интервал
-    if (messagesIntervalRef.current) {
-      clearInterval(messagesIntervalRef.current);
-      messagesIntervalRef.current = null;
-    }
-
-    if (!selectedChat || !selectedAccount) return;
-
-    const accountId = selectedAccount.id;
-    const chatId = selectedChat.chatId;
-
-    // Загружаем сообщения сразу
-    loadMessages(accountId, chatId);
-
-    // Создаем интервал для обновления
-    const interval = setInterval(() => {
-      loadMessages(accountId, chatId);
-    }, 3000);
-
-    messagesIntervalRef.current = interval;
-
-    return () => {
-      if (interval) clearInterval(interval);
-    };
-  }, [selectedChat?.chatId, selectedAccount?.id]);
+  }, [connectedAccounts, selectedAccount]);
 
   // Автоскролл к последнему сообщению
   useEffect(() => {
@@ -140,84 +76,6 @@ export default function ChatPage() {
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  };
-
-  const loadAccounts = async () => {
-    try {
-      const response = await fetch(`${API_URL}/api/accounts`);
-      const data = await response.json();
-      const connectedAccounts = data.filter(
-        (acc: Account) => acc.status === 'CONNECTED'
-      );
-      setAccounts(connectedAccounts);
-
-      // Автоматически выбираем первый подключенный аккаунт
-      if (connectedAccounts.length > 0 && !selectedAccount) {
-        setSelectedAccount(connectedAccounts[0]);
-      }
-    } catch (error) {
-      console.error('Failed to load accounts:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const loadChats = async (accountId: string) => {
-    // Предотвращаем множественные одновременные запросы
-    if (isLoadingChatsRef.current) return;
-
-    isLoadingChatsRef.current = true;
-
-    try {
-      const response = await fetch(`${API_URL}/api/accounts/${accountId}/chats`, {
-        cache: 'no-store',
-        headers: {
-          'Cache-Control': 'no-cache',
-        },
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-
-      const data = await response.json();
-      setChats(data);
-    } catch (error) {
-      console.error('Failed to load chats:', error);
-    } finally {
-      isLoadingChatsRef.current = false;
-    }
-  };
-
-  const loadMessages = async (accountId: string, chatId: string) => {
-    // Предотвращаем множественные одновременные запросы
-    if (isLoadingMessagesRef.current) return;
-
-    isLoadingMessagesRef.current = true;
-
-    try {
-      const encodedChatId = encodeURIComponent(chatId);
-      const response = await fetch(
-        `${API_URL}/api/accounts/${accountId}/chats/${encodedChatId}`,
-        {
-          cache: 'no-store',
-          headers: {
-            'Cache-Control': 'no-cache',
-          },
-        }
-      );
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-
-      const data = await response.json();
-      setMessages(data);
-    } catch (error) {
-      console.error('Failed to load messages:', error);
-    } finally {
-      isLoadingMessagesRef.current = false;
-    }
   };
 
   const sendMessage = async (e: React.FormEvent) => {
@@ -233,36 +91,12 @@ export default function ChatPage() {
     setSending(true);
 
     try {
-      const encodedChatId = encodeURIComponent(selectedChat.chatId);
-      const response = await fetch(
-        `${API_URL}/api/accounts/${selectedAccount.id}/chats/${encodedChatId}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message: newMessage.trim() }),
-        }
-      );
+      // Send via WebSocket
+      const contactNumber = selectedChat.contactNumber;
+      await sendMessageWS(contactNumber, newMessage.trim());
 
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ error: 'Failed to send message' }));
-
-        // If account is connecting, show a helpful message
-        if (response.status === 503 && errorData.error?.includes('connecting')) {
-          alert('🔄 Account is connecting... Please wait a few seconds and try again.');
-        } else {
-          throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
-        }
-        return;
-      }
-
-      // Очищаем поле ввода
+      // Clear input
       setNewMessage('');
-
-      // Перезагружаем сообщения и чаты
-      await Promise.all([
-        loadMessages(selectedAccount.id, selectedChat.chatId),
-        loadChats(selectedAccount.id),
-      ]);
     } catch (error: any) {
       console.error('Failed to send message:', error);
       alert(`❌ ${error.message || 'Failed to send message. Please try again.'}`);
@@ -316,7 +150,7 @@ export default function ChatPage() {
     );
   }
 
-  if (accounts.length === 0) {
+  if (connectedAccounts.length === 0 && !loading) {
     return (
       <div className="min-h-screen bg-black flex items-center justify-center">
         <div className="text-center">
@@ -354,17 +188,17 @@ export default function ChatPage() {
           </div>
 
           {/* Account selector */}
-          {accounts.length > 1 && (
+          {connectedAccounts.length > 1 && (
             <select
               value={selectedAccount?.id || ''}
               onChange={(e) => {
-                const acc = accounts.find((a) => a.id === e.target.value);
+                const acc = connectedAccounts.find((a) => a.id === e.target.value);
                 setSelectedAccount(acc || null);
                 setSelectedChat(null);
               }}
               className="w-full mb-3 px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
             >
-              {accounts.map((acc) => (
+              {connectedAccounts.map((acc) => (
                 <option key={acc.id} value={acc.id}>
                   {acc.name} {acc.phoneNumber ? `(${acc.phoneNumber})` : ''}
                 </option>

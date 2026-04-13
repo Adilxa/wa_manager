@@ -1,163 +1,218 @@
 #!/bin/bash
 
-# Скрипт автоматического деплоя WhatsApp Manager на VPS Ubuntu
-# Использование: bash deploy.sh
+###############################################################################
+# WhatsApp Manager - Secure VPS Deployment
+#
+# Безопасный deployment с полностью закрытыми внутренними сервисами
+# Только Traefik имеет доступ наружу (порты 80/443)
+###############################################################################
 
-set -e  # Прервать выполнение при любой ошибке
+set -e  # Exit on error
 
-echo "================================"
-echo "WhatsApp Manager - Deployment"
-echo "================================"
-echo ""
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m'  # No Color
 
-# Проверка наличия Docker
-if ! command -v docker &> /dev/null; then
-    echo "Docker не установлен. Устанавливаем..."
-    curl -fsSL https://get.docker.com -o get-docker.sh
-    sudo sh get-docker.sh
-    sudo usermod -aG docker $USER
-    rm get-docker.sh
-    echo "✓ Docker установлен!"
-else
-    echo "✓ Docker уже установлен"
+# Print colored messages
+print_msg() {
+    color=$1
+    shift
+    echo -e "${color}$@${NC}"
+}
+
+print_msg $BLUE "
+╔══════════════════════════════════════════════════════════════╗
+║         WhatsApp Manager - VPS Deployment                    ║
+║         Secure Docker Setup with WebSocket                   ║
+╚══════════════════════════════════════════════════════════════╝
+"
+
+# Check if running as root
+if [ "$EUID" -eq 0 ]; then
+    print_msg $RED "⚠️  Не запускайте этот скрипт от root!"
+    print_msg $YELLOW "Используйте: ./deploy.sh"
+    exit 1
 fi
 
-# Проверка наличия Docker Compose
-if ! command -v docker-compose &> /dev/null; then
-    echo "Docker Compose не установлен. Устанавливаем..."
-    sudo apt-get update
-    sudo apt-get install -y docker-compose-plugin
-    echo "✓ Docker Compose установлен!"
-else
-    echo "✓ Docker Compose уже установлен"
-fi
-
-echo ""
-echo "================================"
-echo "Настройка переменных окружения"
-echo "================================"
-
-# Проверка наличия .env файла
+# Check if .env file exists
 if [ ! -f .env ]; then
-    echo "⚠ Файл .env не найден. Создаем из .env.example..."
+    print_msg $RED "❌ Файл .env не найден!"
+    print_msg $YELLOW "Создайте .env файл с необходимыми переменными"
+    exit 1
+fi
 
-    if [ -f .env.example ]; then
-        cp .env.example .env
-        echo ""
-        echo "⚠ ВАЖНО: Отредактируйте файл .env перед продолжением!"
-        echo "   Необходимо настроить:"
-        echo "   - NEXT_PUBLIC_APP_URL (публичный URL вашего приложения)"
-        echo "   - NEXT_PUBLIC_API_URL (публичный URL вашего API)"
-        echo "   - API_SECRET_KEY (случайный секретный ключ)"
-        echo ""
-        echo "   Для локальной БД PostgreSQL можно оставить DATABASE_URL как есть"
-        echo ""
-        read -p "Нажмите Enter после редактирования .env файла..."
-    else
-        echo "❌ Файл .env.example не найден!"
+# Load environment variables
+print_msg $BLUE "📦 Загрузка переменных окружения..."
+export $(cat .env | grep -v '^#' | xargs)
+
+# Validate required variables
+if [ -z "$NEXT_PUBLIC_APP_URL" ]; then
+    print_msg $RED "❌ Не указан NEXT_PUBLIC_APP_URL в .env"
+    exit 1
+fi
+
+# Create required directories
+print_msg $BLUE "📁 Создание директорий..."
+mkdir -p traefik logs .baileys_auth
+
+# Create Traefik configuration
+if [ ! -f traefik/traefik.yml ]; then
+    print_msg $BLUE "⚙️  Создание Traefik конфигурации..."
+    cat > traefik/traefik.yml <<EOF
+api:
+  dashboard: true
+  insecure: false
+
+entryPoints:
+  web:
+    address: ":80"
+    http:
+      redirections:
+        entryPoint:
+          to: websecure
+          scheme: https
+          permanent: true
+
+  websecure:
+    address: ":443"
+    http:
+      tls:
+        certResolver: letsencrypt
+
+providers:
+  docker:
+    endpoint: "unix:///var/run/docker.sock"
+    exposedByDefault: false
+    network: wa-network
+  file:
+    filename: /etc/traefik/dynamic.yml
+    watch: true
+
+certificatesResolvers:
+  letsencrypt:
+    acme:
+      email: admin@${NEXT_PUBLIC_APP_URL#https://}
+      storage: /acme/acme.json
+      tlsChallenge: true
+
+log:
+  level: INFO
+  format: json
+EOF
+fi
+
+# Create dynamic Traefik configuration
+if [ ! -f traefik/dynamic.yml ]; then
+    cat > traefik/dynamic.yml <<EOF
+http:
+  middlewares:
+    secure-headers:
+      headers:
+        frameDeny: true
+        sslRedirect: true
+        browserXssFilter: true
+        contentTypeNosniff: true
+        stsIncludeSubdomains: true
+        stsPreload: true
+        stsSeconds: 31536000
+
+    rate-limit:
+      rateLimit:
+        average: 100
+        burst: 50
+        period: 1s
+
+    compression:
+      compress: true
+EOF
+fi
+
+# Check Docker
+print_msg $BLUE "🐳 Проверка Docker..."
+if ! command -v docker &> /dev/null; then
+    print_msg $RED "❌ Docker не установлен!"
+    print_msg $YELLOW "Установите: https://docs.docker.com/engine/install/"
+    exit 1
+fi
+
+# Determine Docker Compose command
+if docker compose version &> /dev/null; then
+    DOCKER_COMPOSE="docker compose"
+else
+    DOCKER_COMPOSE="docker-compose"
+fi
+
+# Stop existing containers
+print_msg $BLUE "🛑 Остановка контейнеров..."
+$DOCKER_COMPOSE down || true
+
+# Pull images
+print_msg $BLUE "📥 Загрузка образов..."
+$DOCKER_COMPOSE pull
+
+# Build application
+print_msg $BLUE "🔨 Сборка приложения..."
+$DOCKER_COMPOSE build --no-cache
+
+# Start services
+print_msg $BLUE "🚀 Запуск сервисов..."
+$DOCKER_COMPOSE up -d
+
+# Wait for services
+print_msg $BLUE "⏳ Ожидание готовности..."
+sleep 10
+
+# Health check
+print_msg $BLUE "🏥 Проверка здоровья..."
+for i in {1..30}; do
+    if docker exec wa-manager curl -sf http://localhost:3000 -o /dev/null && \
+       docker exec wa-manager curl -sf http://localhost:5001/health -o /dev/null; then
+        print_msg $GREEN "✅ Сервисы готовы!"
+        break
+    fi
+    if [ $i -eq 30 ]; then
+        print_msg $RED "❌ Timeout waiting for services"
         exit 1
     fi
-else
-    echo "✓ Файл .env найден"
-fi
+    echo -n "."
+    sleep 2
+done
 
-echo ""
-echo "================================"
-echo "Остановка старых контейнеров"
-echo "================================"
-
-# Останавливаем и удаляем старые контейнеры
-if [ "$(docker ps -q -f name=wa-manager)" ] || [ "$(docker ps -q -f name=wa-postgres)" ]; then
-    echo "Останавливаем работающие контейнеры..."
-    docker-compose down
-else
-    echo "✓ Нет работающих контейнеров"
-fi
-
-echo ""
-echo "================================"
-echo "Сборка и запуск контейнеров"
-echo "================================"
-
-# Собираем и запускаем контейнеры
-echo "Собираем Docker образ..."
-docker-compose build --no-cache
-
-echo "Запускаем контейнеры (PostgreSQL + WhatsApp Manager)..."
-docker-compose up -d
-
-echo ""
-echo "================================"
-echo "Проверка статуса"
-echo "================================"
-
-# Ждем несколько секунд для запуска контейнеров
-echo "Ожидание запуска контейнеров (15 секунд)..."
-sleep 15
-
-# Проверяем статус контейнеров
-echo ""
-echo "Статус контейнеров:"
-docker-compose ps
-
-echo ""
-echo "Проверка PostgreSQL..."
-if docker-compose exec -T postgres pg_isready -U postgres > /dev/null 2>&1; then
-    echo "✓ PostgreSQL работает"
-else
-    echo "⚠ PostgreSQL еще запускается..."
-fi
-
-echo ""
-echo "================================"
-echo "Настройка Firewall (UFW)"
-echo "================================"
-
+# Configure firewall
+print_msg $BLUE "\n🔥 Настройка Firewall..."
 if command -v ufw &> /dev/null; then
-    echo "Открываем необходимые порты..."
-    sudo ufw allow 22/tcp      # SSH
-    sudo ufw allow 80/tcp      # HTTP
-    sudo ufw allow 443/tcp     # HTTPS
-    sudo ufw allow 3000/tcp    # Next.js UI
-    sudo ufw allow 5001/tcp    # WhatsApp API
-    sudo ufw allow 5432/tcp    # PostgreSQL (для внешних подключений)
-
-    # Активируем UFW если не активен
+    sudo ufw allow 22/tcp   # SSH
+    sudo ufw allow 80/tcp   # HTTP
+    sudo ufw allow 443/tcp  # HTTPS
     sudo ufw --force enable
-
-    echo "✓ Firewall настроен"
-    sudo ufw status
-else
-    echo "⚠ UFW не установлен. Рекомендуется установить для безопасности:"
-    echo "   sudo apt-get install ufw"
+    print_msg $GREEN "✅ Firewall настроен (только 80/443/22)"
 fi
 
-echo ""
-echo "================================"
-echo "Деплой завершен!"
-echo "================================"
-echo ""
-echo "Приложение доступно по адресам:"
-echo "  UI:  http://$(hostname -I | awk '{print $1}'):3000"
-echo "  API: http://$(hostname -I | awk '{print $1}'):5001"
-echo "  DB:  postgresql://postgres:postgres@$(hostname -I | awk '{print $1}'):5432/wa_manager"
-echo ""
-echo "Для просмотра логов:"
-echo "  docker-compose logs -f"
-echo ""
-echo "Логи конкретных сервисов:"
-echo "  docker-compose logs -f wa-manager"
-echo "  docker-compose logs -f postgres"
-echo ""
-echo "Для остановки:"
-echo "  docker-compose down"
-echo ""
-echo "Для перезапуска:"
-echo "  docker-compose restart"
-echo ""
-echo "⚠ РЕКОМЕНДАЦИИ ДЛЯ PRODUCTION:"
-echo "   1. Измените пароль PostgreSQL в docker-compose.yml"
-echo "   2. Используйте сильный API_SECRET_KEY в .env"
-echo "   3. Настройте Nginx с SSL (см. README-DEPLOY.md)"
-echo "   4. Настройте регулярное резервное копирование БД"
-echo ""
+# Show status
+print_msg $BLUE "\n📊 Статус контейнеров:"
+$DOCKER_COMPOSE ps
+
+print_msg $GREEN "
+╔══════════════════════════════════════════════════════════════╗
+║                  ✅ Deployment успешен!                      ║
+╚══════════════════════════════════════════════════════════════╝
+
+🌐 URL: $NEXT_PUBLIC_APP_URL
+
+🔒 Безопасность:
+   ✓ PostgreSQL - закрыт (внутренняя сеть)
+   ✓ Redis - закрыт (внутренняя сеть)
+   ✓ SSL/TLS - автоматически (Let's Encrypt)
+   ✓ WebSocket - полностью настроен
+
+📊 Команды:
+   Логи:       $DOCKER_COMPOSE logs -f
+   Статус:     $DOCKER_COMPOSE ps
+   Стоп:       $DOCKER_COMPOSE down
+   Рестарт:    $DOCKER_COMPOSE restart
+
+🎯 Мониторинг: ./monitor.sh
+"

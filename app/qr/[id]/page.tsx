@@ -3,6 +3,7 @@
 import { useEffect, useState, useRef } from 'react';
 import { useParams } from 'next/navigation';
 import { CheckCircle2, Loader2, AlertCircle, RefreshCw, MessageSquare, Smartphone, QrCode } from 'lucide-react';
+import { socketManager } from '@/lib/socket';
 
 interface Account {
   id: string;
@@ -103,18 +104,59 @@ export default function QRPage() {
       pollingIntervalRef.current = null;
     }
 
-    const getPollingInterval = () => {
-      const status = accountStatusRef.current;
-      if (status === 'CONNECTED') return 10000;
-      if (['QR_READY', 'CONNECTING', 'AUTHENTICATING'].includes(status)) return 2000;
-      return 5000;
-    };
+    if (!accountId) return;
 
-    const interval = setInterval(() => loadAccount(), getPollingInterval());
-    pollingIntervalRef.current = interval;
+    // Если WebSocket включен - подписаться
+    if (socketManager.isEnabled()) {
+      const qrSocket = socketManager.getSocket('/qr');
+      const accountSocket = socketManager.getSocket('/accounts');
 
-    return () => { if (interval) clearInterval(interval); };
-  }, [account?.clientStatus]);
+      qrSocket.emit('join', accountId);
+      accountSocket.emit('join', accountId);
+
+      qrSocket.on('qr:generated', (data: any) => {
+        if (data.accountId === accountId) {
+          setAccount(prev => prev ? {
+            ...prev,
+            qrCode: data.qrCode,
+            clientStatus: 'QR_READY'
+          } : null);
+        }
+      });
+
+      accountSocket.on('account:status', (data: any) => {
+        if (data.accountId === accountId) {
+          setAccount(prev => prev ? {
+            ...prev,
+            status: data.status,
+            clientStatus: data.status,
+            phoneNumber: data.phoneNumber
+          } : null);
+          accountStatusRef.current = data.status;
+        }
+      });
+
+      return () => {
+        qrSocket.emit('leave', accountId);
+        accountSocket.emit('leave', accountId);
+        qrSocket.off('qr:generated');
+        accountSocket.off('account:status');
+      };
+    } else {
+      // Fallback: adaptive polling
+      const getPollingInterval = () => {
+        const status = accountStatusRef.current;
+        if (status === 'CONNECTED') return 10000;
+        if (['QR_READY', 'CONNECTING', 'AUTHENTICATING'].includes(status)) return 2000;
+        return 5000;
+      };
+
+      const interval = setInterval(() => loadAccount(), getPollingInterval());
+      pollingIntervalRef.current = interval;
+
+      return () => { if (interval) clearInterval(interval); };
+    }
+  }, [accountId, account?.clientStatus]);
 
   useEffect(() => {
     if (!loading && account && !autoConnectAttempted) {
