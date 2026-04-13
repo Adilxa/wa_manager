@@ -1,52 +1,47 @@
-# Dependencies
+# Git
+.git
+.gitignore
+.github
+
+# Node modules
 node_modules
+
+# Build output
+.next
+out
+dist
+
+# Development files
+.env.local
+.env.development
+*.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
-# Next.js
-.next/
-out/
-
-# Production
-/build
-
-# Misc
-.DS_Store
-*.pem
-
-# Debug
-*.log
-
-# Local env files
-.env*.local
-
-# Vercel
-.vercel
-
-# TypeScript
-*.tsbuildinfo
-
-# WhatsApp data (будет в volumes)
-.wwebjs_auth/
-.wwebjs_cache/
-.baileys_auth/
-
-# Logs
-logs/
-
-# Git
-.git
-.gitignore
+# Testing
+coverage
+.nyc_output
 
 # IDE
-.vscode/
-.idea/
+.vscode
+.idea
+*.swp
+*.swo
 
-# Tests
-coverage/
-.nyc_output/
+# OS
+.DS_Store
+Thumbs.db
 
-# Docs
+# Documentation
 README.md
 docs/
+*.md
+
+# Baileys auth (will be mounted as volume)
+.baileys_auth/
+
+# Docker
+docker-compose*.yml
+Dockerfile
+deploy.sh

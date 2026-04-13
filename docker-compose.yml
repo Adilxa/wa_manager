@@ -73,6 +73,8 @@ services:
     # NO EXTERNAL PORTS - internal network only
     expose:
       - "6379"
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-adilhankrasavchikvoobshebomba}
     volumes:
       - redis_data:/data
     networks:
@@ -83,29 +85,17 @@ services:
       --appendfsync everysec
       --maxmemory 256mb
       --maxmemory-policy noeviction
-      --requirepass ${REDIS_PASSWORD:-adilhankrasavchikvoobshebomba}
-      --bind 0.0.0.0
-      --protected-mode yes
+      --requirepass adilhankrasavchikvoobshebomba
+      --save 60 1
+      --loglevel warning
     healthcheck:
-      test:
-        [
-          "CMD",
-          "redis-cli",
-          "-a",
-          "${REDIS_PASSWORD:-adilhankrasavchikvoobshebomba}",
-          "ping",
-        ]
+      test: ["CMD", "redis-cli", "-a", "adilhankrasavchikvoobshebomba", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
     # Security hardening
     security_opt:
       - no-new-privileges:true
-    cap_drop:
-      - ALL
-    cap_add:
-      - SETGID
-      - SETUID
 
   wa-manager:
     build:
