@@ -29,7 +29,7 @@
     "@types/node": "^24.10.0",
     "@types/react": "^19.2.2",
     "@types/react-dom": "^19.2.2",
-    "@whiskeysockets/baileys": "^6.7.9",
+    "@whiskeysockets/baileys": "^7.0.0-rc.9",
     "bullmq": "^5.28.2",
     "cors": "^2.8.5",
     "express": "^5.1.0",
