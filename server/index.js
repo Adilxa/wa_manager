@@ -913,27 +913,29 @@ async function sendMessageWithHumanBehavior(accountId, jid, message) {
   }
 
   // Check if socket is authenticated
-  if (!clientInfo.sock.user || !clientInfo.sock.user.id) {
-    logger.error(`[sendMessage] Socket not authenticated for ${accountId}, user: ${JSON.stringify(clientInfo.sock.user)}`);
+  const hasUser = clientInfo.sock.user && clientInfo.sock.user.id;
+  const wsState = clientInfo.sock.ws?.readyState;
+
+  logger.debug(`[sendMessage] Client state for ${accountId}:`, {
+    sockAvailable: !!clientInfo.sock,
+    sendMessageAvailable: typeof clientInfo.sock.sendMessage,
+    authenticated: hasUser,
+    userId: clientInfo.sock.user?.id || 'none',
+    wsState: wsState !== undefined ? wsState : 'undefined',
+    clientStatus: clientInfo.status
+  });
+
+  if (!hasUser) {
+    logger.error(`[sendMessage] Socket not authenticated for ${accountId}`);
     throw new Error("Socket not authenticated - client may need to reconnect");
   }
 
-  // Check WebSocket connection state
-  const wsState = clientInfo.sock.ws?.readyState;
-  logger.debug(`[sendMessage] WebSocket state: ${wsState} (0=CONNECTING, 1=OPEN, 2=CLOSING, 3=CLOSED)`);
-
-  if (wsState !== 1) { // 1 = OPEN
-    logger.error(`[sendMessage] WebSocket not open for ${accountId}, state: ${wsState}`);
-    throw new Error(`WebSocket connection not ready (state: ${wsState})`);
+  // Warn about WebSocket state but don't fail - Baileys may use different structure
+  if (wsState !== undefined && wsState !== 1) { // 1 = OPEN
+    logger.warn(`[sendMessage] WebSocket state is ${wsState} (not OPEN=1) for ${accountId}, attempting send anyway...`);
+  } else if (wsState === undefined) {
+    logger.warn(`[sendMessage] WebSocket state undefined for ${accountId}, Baileys may use different structure - attempting send anyway...`);
   }
-
-  logger.debug(`[sendMessage] Client validated for ${accountId}:`, {
-    sockAvailable: !!clientInfo.sock,
-    sendMessageAvailable: typeof clientInfo.sock.sendMessage,
-    authenticated: !!clientInfo.sock.user,
-    userId: clientInfo.sock.user?.id,
-    wsState
-  });
 
   const account = await prisma.whatsAppAccount.findUnique({
     where: { id: accountId },
