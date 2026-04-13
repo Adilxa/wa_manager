@@ -109,25 +109,36 @@ export default function QRPage() {
 
     if (!accountId) return;
 
+    console.log('[QR Page] Setting up WebSocket subscriptions for account:', accountId);
+
     // Use WebSocket for real-time updates
     const qrSocket = socketManager.getSocket('/qr');
     const accountSocket = socketManager.getSocket('/accounts');
 
+    // Join rooms
     qrSocket.emit('join', accountId);
     accountSocket.emit('join', accountId);
 
-    qrSocket.on('qr:generated', (data: any) => {
+    console.log('[QR Page] Joined rooms for account:', accountId);
+
+    // Handler for QR code generation
+    const handleQRGenerated = (data: any) => {
+      console.log('[QR Page] Received qr:generated event:', data);
       if (data.accountId === accountId) {
+        console.log('[QR Page] QR code updated for current account');
         setAccount(prev => prev ? {
           ...prev,
           qrCode: data.qrCode,
           clientStatus: 'QR_READY'
         } : null);
       }
-    });
+    };
 
-    accountSocket.on('account:status', (data: any) => {
+    // Handler for account status updates
+    const handleAccountStatus = (data: any) => {
+      console.log('[QR Page] Received account:status event:', data);
       if (data.accountId === accountId) {
+        console.log('[QR Page] Status updated:', data.status);
         setAccount(prev => prev ? {
           ...prev,
           status: data.status,
@@ -136,21 +147,27 @@ export default function QRPage() {
         } : null);
         accountStatusRef.current = data.status;
       }
-    });
+    };
+
+    qrSocket.on('qr:generated', handleQRGenerated);
+    accountSocket.on('account:status', handleAccountStatus);
 
     return () => {
+      console.log('[QR Page] Cleaning up WebSocket subscriptions for account:', accountId);
       qrSocket.emit('leave', accountId);
       accountSocket.emit('leave', accountId);
-      qrSocket.off('qr:generated');
-      accountSocket.off('account:status');
+      qrSocket.off('qr:generated', handleQRGenerated);
+      accountSocket.off('account:status', handleAccountStatus);
     };
-  }, [accountId, account?.clientStatus]);
+  }, [accountId]);
 
   useEffect(() => {
     if (!loading && account && !autoConnectAttempted) {
       if (account.clientStatus === 'DISCONNECTED') {
         setAutoConnectAttempted(true);
-        connectAccount();
+        connectAccount().catch(err => {
+          console.error('[QR Page] Auto-connect failed:', err);
+        });
       }
     }
   }, [loading, account?.clientStatus, autoConnectAttempted]);
