@@ -146,7 +146,9 @@ class SocketManager {
 
         console.log(`[WS] Emitting ${event} on ${namespace}`, data);
 
-        socket.emit(event, data, (response: any) => {
+        // Socket.IO requires callback as last argument
+        // If data is undefined, don't pass it
+        const callback = (response: any) => {
           clearTimeout(timeout);
           console.log(`[WS] Response for ${event}:`, response);
 
@@ -155,7 +157,13 @@ class SocketManager {
           } else {
             resolve(response);
           }
-        });
+        };
+
+        if (data !== undefined) {
+          socket.emit(event, data, callback);
+        } else {
+          socket.emit(event, callback);
+        }
       });
     } catch (error: any) {
       console.error(`[WS] Failed to emit ${event}:`, error.message);
