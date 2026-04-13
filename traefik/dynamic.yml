@@ -4,3 +4,10 @@ http:
       rateLimit:
         average: 100
         burst: 50
+
+    websocket-headers:
+      headers:
+        customRequestHeaders:
+          X-Forwarded-Proto: "https"
+        customResponseHeaders:
+          X-Forwarded-Proto: "https"
