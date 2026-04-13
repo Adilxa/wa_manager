@@ -27,11 +27,23 @@ module.exports = function(io, dependencies) {
     });
 
     // Get all accounts
-    socket.on('accounts:list', async (callback) => {
+    socket.on('accounts:list', async (...args) => {
+      logger.info('[Accounts NS] Received accounts:list request, args:', args.length, 'types:', args.map(a => typeof a));
+
+      // The last argument should be the callback (if acknowledgement is requested)
+      const callback = typeof args[args.length - 1] === 'function' ? args[args.length - 1] : null;
+
+      if (!callback) {
+        logger.warn('[Accounts NS] No callback provided for accounts:list');
+        return;
+      }
+
       try {
+        logger.info('[Accounts NS] Fetching accounts from database...');
         const accounts = await prisma.whatsAppAccount.findMany({
           orderBy: { createdAt: 'desc' },
         });
+        logger.info(`[Accounts NS] Found ${accounts.length} accounts`);
 
         const accountsWithClientStatus = accounts.map(account => {
           const clientStatus = clients.get(account.id);
@@ -44,10 +56,13 @@ module.exports = function(io, dependencies) {
           };
         });
 
+        logger.info('[Accounts NS] Sending response with', accountsWithClientStatus.length, 'accounts');
         callback({ success: true, data: accountsWithClientStatus });
       } catch (error) {
-        logger.error('[Accounts NS] Failed to list accounts:', error.message);
-        callback({ success: false, error: error.message });
+        logger.error('[Accounts NS] Failed to list accounts:', error.message, error.stack);
+        if (callback) {
+          callback({ success: false, error: error.message });
+        }
       }
     });
 
