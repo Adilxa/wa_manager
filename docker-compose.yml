@@ -126,35 +126,46 @@ services:
     labels:
       - "traefik.enable=true"
 
-      # Frontend (Next.js) routing
-      - "traefik.http.routers.wa-app.rule=Host(`ilovesanzhar.click`)"
-      - "traefik.http.routers.wa-app.entrypoints=websecure"
-      - "traefik.http.routers.wa-app.tls.certresolver=letsencrypt"
-      - "traefik.http.routers.wa-app.service=wa-app"
-      - "traefik.http.routers.wa-app.priority=1"
-      - "traefik.http.services.wa-app.loadbalancer.server.port=3000"
-
-      # HTTP to HTTPS redirect for frontend
-      - "traefik.http.routers.wa-app-http.rule=Host(`ilovesanzhar.click`)"
-      - "traefik.http.routers.wa-app-http.entrypoints=web"
-      - "traefik.http.routers.wa-app-http.middlewares=https-redirect"
+      # Middleware for HTTPS redirect
       - "traefik.http.middlewares.https-redirect.redirectscheme.scheme=https"
       - "traefik.http.middlewares.https-redirect.redirectscheme.permanent=true"
 
-      # API & WebSocket routing (higher priority)
+      # Middleware for WebSocket headers
+      - "traefik.http.middlewares.websocket-headers.headers.customrequestheaders.X-Forwarded-Proto=https"
+
+      # Services
+      - "traefik.http.services.wa-app.loadbalancer.server.port=3000"
+      - "traefik.http.services.wa-api.loadbalancer.server.port=5001"
+      - "traefik.http.services.wa-api.loadbalancer.sticky.cookie.name=server_id"
+
+      # API & WebSocket routing (higher priority) - HTTPS
       - "traefik.http.routers.wa-api.rule=Host(`ilovesanzhar.click`) && (PathPrefix(`/api`) || PathPrefix(`/socket.io`))"
       - "traefik.http.routers.wa-api.entrypoints=websecure"
       - "traefik.http.routers.wa-api.tls.certresolver=letsencrypt"
       - "traefik.http.routers.wa-api.service=wa-api"
       - "traefik.http.routers.wa-api.priority=10"
-      - "traefik.http.routers.wa-api.middlewares=websocket-headers@file"
-      - "traefik.http.services.wa-api.loadbalancer.server.port=5001"
-      - "traefik.http.services.wa-api.loadbalancer.sticky.cookie.name=server_id"
+      - "traefik.http.routers.wa-api.middlewares=websocket-headers"
 
-      # HTTP to HTTPS redirect for API
+      # API & WebSocket routing - HTTP to HTTPS redirect
       - "traefik.http.routers.wa-api-http.rule=Host(`ilovesanzhar.click`) && (PathPrefix(`/api`) || PathPrefix(`/socket.io`))"
       - "traefik.http.routers.wa-api-http.entrypoints=web"
+      - "traefik.http.routers.wa-api-http.service=wa-api"
+      - "traefik.http.routers.wa-api-http.priority=10"
       - "traefik.http.routers.wa-api-http.middlewares=https-redirect"
+
+      # Frontend (Next.js) routing - HTTPS
+      - "traefik.http.routers.wa-app.rule=Host(`ilovesanzhar.click`)"
+      - "traefik.http.routers.wa-app.entrypoints=websecure"
+      - "traefik.http.routers.wa-app.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.wa-app.service=wa-app"
+      - "traefik.http.routers.wa-app.priority=1"
+
+      # Frontend - HTTP to HTTPS redirect
+      - "traefik.http.routers.wa-app-http.rule=Host(`ilovesanzhar.click`)"
+      - "traefik.http.routers.wa-app-http.entrypoints=web"
+      - "traefik.http.routers.wa-app-http.service=wa-app"
+      - "traefik.http.routers.wa-app-http.priority=1"
+      - "traefik.http.routers.wa-app-http.middlewares=https-redirect"
     volumes:
       - baileys_auth:/app/.baileys_auth
       - wa_logs:/app/logs

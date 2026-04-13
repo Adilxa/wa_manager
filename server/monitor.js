@@ -14,17 +14,17 @@ const REDIS_HOST = process.env.REDIS_HOST || 'localhost';
 const REDIS_PORT = process.env.REDIS_PORT || 6379;
 const REDIS_PASSWORD = process.env.REDIS_PASSWORD;
 
-// Validate required env vars
-if (!BOT_TOKEN) {
-  console.error('ERROR: TELEGRAM_BOT_TOKEN is required!');
-  process.exit(1);
-}
-
 // Initialize Prisma
 const prisma = new PrismaClient();
 
-// Initialize bot with polling
-const bot = new TelegramBot(BOT_TOKEN, { polling: true });
+// Initialize bot only if token is provided
+let bot = null;
+if (BOT_TOKEN) {
+  bot = new TelegramBot(BOT_TOKEN, { polling: true });
+  console.log('[MONITOR] Telegram bot initialized');
+} else {
+  console.log('[MONITOR] Running without Telegram notifications (TELEGRAM_BOT_TOKEN not set)');
+}
 
 // Services status tracker
 let lastStatus = {
@@ -42,6 +42,12 @@ function log(message) {
 
 // Send Telegram notification to all subscribers
 async function sendNotification(message) {
+  // Skip if bot is not initialized
+  if (!bot) {
+    log(`[Skip notification - no bot]: ${message}`);
+    return;
+  }
+
   try {
     const timestamp = new Date().toLocaleString('ru-RU', {
       timeZone: 'Asia/Almaty',
@@ -314,8 +320,9 @@ async function monitorServices() {
   };
 }
 
-// Bot command handlers
-bot.onText(/\/start/, async (msg) => {
+// Bot command handlers (only if bot is initialized)
+if (bot) {
+  bot.onText(/\/start/, async (msg) => {
   const chatId = msg.chat.id.toString();
   const username = msg.from.username;
   const firstName = msg.from.first_name;
@@ -389,30 +396,31 @@ bot.onText(/\/stop/, async (msg) => {
   }
 });
 
-bot.onText(/\/status/, async (msg) => {
-  const chatId = msg.chat.id.toString();
+  bot.onText(/\/status/, async (msg) => {
+    const chatId = msg.chat.id.toString();
 
-  try {
-    await bot.sendMessage(chatId, '🔄 Проверяю статус сервисов...');
+    try {
+      await bot.sendMessage(chatId, '🔄 Проверяю статус сервисов...');
 
-    const results = {
-      postgres: await checkPostgres(),
-      redis: await checkRedis(),
-      waManager: await checkWAManager()
-    };
+      const results = {
+        postgres: await checkPostgres(),
+        redis: await checkRedis(),
+        waManager: await checkWAManager()
+      };
 
-    const statusMessage =
-      `📊 Статус сервисов:\n\n` +
-      `${results.postgres.message}\n` +
-      `${results.redis.message}\n` +
-      `${results.waManager.message}`;
+      const statusMessage =
+        `📊 Статус сервисов:\n\n` +
+        `${results.postgres.message}\n` +
+        `${results.redis.message}\n` +
+        `${results.waManager.message}`;
 
-    await bot.sendMessage(chatId, statusMessage);
-  } catch (error) {
-    log(`Error handling /status from ${chatId}: ${error.message}`);
-    await bot.sendMessage(chatId, '❌ Ошибка при проверке статуса.');
-  }
-});
+      await bot.sendMessage(chatId, statusMessage);
+    } catch (error) {
+      log(`Error handling /status from ${chatId}: ${error.message}`);
+      await bot.sendMessage(chatId, '❌ Ошибка при проверке статуса.');
+    }
+  });
+}
 
 // Start monitoring
 async function start() {
@@ -440,7 +448,7 @@ async function start() {
 process.on('SIGTERM', async () => {
   log('Received SIGTERM, shutting down...');
   await sendNotification('🛑 Система мониторинга WA Manager остановлена');
-  await bot.stopPolling();
+  if (bot) await bot.stopPolling();
   await prisma.$disconnect();
   process.exit(0);
 });
@@ -448,7 +456,7 @@ process.on('SIGTERM', async () => {
 process.on('SIGINT', async () => {
   log('Received SIGINT, shutting down...');
   await sendNotification('🛑 Система мониторинга WA Manager остановлена');
-  await bot.stopPolling();
+  if (bot) await bot.stopPolling();
   await prisma.$disconnect();
   process.exit(0);
 });
