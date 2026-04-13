@@ -7,7 +7,10 @@
 
 import { io, Socket } from 'socket.io-client';
 
+// In production, API is proxied through the same domain
+// In development, API runs on port 5001
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001';
+const IS_PRODUCTION = process.env.NODE_ENV === 'production';
 
 type SocketCallback<T = any> = (response: { success: boolean; data?: T; error?: string }) => void;
 
@@ -20,14 +23,23 @@ class SocketManager {
    */
   getSocket(namespace: string): Socket {
     if (!this.sockets.has(namespace)) {
-      const socket = io(`${API_URL}${namespace}`, {
+      // In production, use the same domain with /socket.io path
+      // In development, connect directly to API server
+      const socketUrl = IS_PRODUCTION ? '' : API_URL;
+      const socketOptions: any = {
+        path: '/socket.io',
         transports: ['websocket', 'polling'],
         reconnection: true,
         reconnectionDelay: 1000,
         reconnectionDelayMax: 5000,
         reconnectionAttempts: Infinity,
         timeout: 10000,
-      });
+        autoConnect: true,
+      };
+
+      console.log(`[WS] Creating socket for ${namespace}, URL: ${socketUrl || 'same-origin'}, path: /socket.io`);
+
+      const socket = io(`${socketUrl}${namespace}`, socketOptions);
 
       socket.on('connect', () => {
         console.log(`[WS] Connected: ${namespace}`);
@@ -41,11 +53,43 @@ class SocketManager {
         console.error(`[WS] Error on ${namespace}:`, error);
       });
 
+      socket.on('connect_error', (error) => {
+        console.error(`[WS] Connection error on ${namespace}:`, error.message);
+      });
+
       this.sockets.set(namespace, socket);
       this.listeners.set(namespace, new Map());
     }
 
     return this.sockets.get(namespace)!;
+  }
+
+  /**
+   * Wait for socket to connect
+   */
+  private waitForConnection(namespace: string, timeout = 10000): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const socket = this.getSocket(namespace);
+
+      if (socket.connected) {
+        resolve();
+        return;
+      }
+
+      const timer = setTimeout(() => {
+        reject(new Error(`Connection timeout for ${namespace}`));
+      }, timeout);
+
+      socket.once('connect', () => {
+        clearTimeout(timer);
+        resolve();
+      });
+
+      socket.once('connect_error', (error) => {
+        clearTimeout(timer);
+        reject(error);
+      });
+    });
   }
 
   /**
@@ -86,34 +130,37 @@ class SocketManager {
   /**
    * Emit an event and wait for callback
    */
-  emit<T = any>(namespace: string, event: string, data?: any): Promise<{ success: boolean; data?: T; error?: string }> {
-    return new Promise((resolve, reject) => {
-      const socket = this.getSocket(namespace);
+  async emit<T = any>(namespace: string, event: string, data?: any): Promise<{ success: boolean; data?: T; error?: string }> {
+    try {
+      // Wait for connection first
+      await this.waitForConnection(namespace);
 
-      // Check if socket is connected
-      if (!socket.connected) {
-        console.warn(`[WS] Socket ${namespace} not connected, waiting...`);
-      }
+      return new Promise((resolve) => {
+        const socket = this.getSocket(namespace);
 
-      // Set timeout for response
-      const timeout = setTimeout(() => {
-        console.error(`[WS] Timeout waiting for ${event} on ${namespace}`);
-        resolve({ success: false, error: 'Request timeout' });
-      }, 30000); // 30 second timeout
+        // Set timeout for response
+        const timeout = setTimeout(() => {
+          console.error(`[WS] Timeout waiting for ${event} on ${namespace}`);
+          resolve({ success: false, error: 'Request timeout' });
+        }, 30000); // 30 second timeout
 
-      console.log(`[WS] Emitting ${event} on ${namespace}`, data);
+        console.log(`[WS] Emitting ${event} on ${namespace}`, data);
 
-      socket.emit(event, data, (response: any) => {
-        clearTimeout(timeout);
-        console.log(`[WS] Response for ${event}:`, response);
+        socket.emit(event, data, (response: any) => {
+          clearTimeout(timeout);
+          console.log(`[WS] Response for ${event}:`, response);
 
-        if (!response) {
-          resolve({ success: false, error: 'No response from server' });
-        } else {
-          resolve(response);
-        }
+          if (!response) {
+            resolve({ success: false, error: 'No response from server' });
+          } else {
+            resolve(response);
+          }
+        });
       });
-    });
+    } catch (error: any) {
+      console.error(`[WS] Failed to emit ${event}:`, error.message);
+      return { success: false, error: error.message };
+    }
   }
 
   /**

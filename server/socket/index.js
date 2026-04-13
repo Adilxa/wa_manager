@@ -17,13 +17,16 @@ async function initSocketIO(httpServer, dependencies) {
   } = dependencies;
 
   const io = new Server(httpServer, {
+    path: '/socket.io',
     cors: {
       origin: process.env.NEXT_PUBLIC_APP_URL || '*',
-      methods: ['GET', 'POST']
+      methods: ['GET', 'POST'],
+      credentials: true
     },
     transports: ['websocket', 'polling'],
     pingTimeout: 60000,
-    pingInterval: 25000
+    pingInterval: 25000,
+    allowEIO3: true
   });
 
   // Redis adapter for horizontal scaling
