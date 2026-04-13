@@ -27,12 +27,17 @@ async function initSocketIO(httpServer, dependencies) {
   });
 
   // Redis adapter for horizontal scaling
-  const pubClient = new Redis({
+  const redisConfig = {
     host: process.env.REDIS_HOST || 'redis',
-    port: parseInt(process.env.REDIS_PORT || '6379'),
-    password: process.env.REDIS_PASSWORD
-  });
+    port: parseInt(process.env.REDIS_PORT || '6379')
+  };
 
+  // Add password only if provided
+  if (process.env.REDIS_PASSWORD) {
+    redisConfig.password = process.env.REDIS_PASSWORD;
+  }
+
+  const pubClient = new Redis(redisConfig);
   const subClient = pubClient.duplicate();
 
   io.adapter(createAdapter(pubClient, subClient));

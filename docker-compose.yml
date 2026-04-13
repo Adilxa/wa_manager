@@ -70,11 +70,9 @@ services:
     image: redis:7-alpine
     container_name: wa-redis
     restart: unless-stopped
-    # NO EXTERNAL PORTS - internal network only
+    # NO EXTERNAL PORTS - internal network only (safe without password)
     expose:
       - "6379"
-    environment:
-      REDIS_PASSWORD: ${REDIS_PASSWORD:-adilhankrasavchikvoobshebomba}
     volumes:
       - redis_data:/data
     networks:
@@ -85,11 +83,10 @@ services:
       --appendfsync everysec
       --maxmemory 256mb
       --maxmemory-policy noeviction
-      --requirepass adilhankrasavchikvoobshebomba
       --save 60 1
       --loglevel warning
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "adilhankrasavchikvoobshebomba", "ping"]
+      test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -118,7 +115,6 @@ services:
       DIRECT_URL: postgresql://postgres:postgres@postgres:5432/wa_manager?schema=public
       REDIS_HOST: redis
       REDIS_PORT: 6379
-      REDIS_PASSWORD: ${REDIS_PASSWORD:-adilhankrasavchikvoobshebomba}
       NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-http://localhost:3000}
       NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:5001}
       NEXT_PUBLIC_USE_WEBSOCKET: ${NEXT_PUBLIC_USE_WEBSOCKET:-false}

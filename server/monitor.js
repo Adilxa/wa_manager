@@ -119,13 +119,19 @@ async function checkPostgres() {
 async function checkRedis() {
   let client;
   try {
-    client = new Redis({
+    const redisConfig = {
       host: REDIS_HOST,
       port: REDIS_PORT,
-      password: REDIS_PASSWORD,
       maxRetriesPerRequest: 1,
       retryStrategy: () => null // Don't retry
-    });
+    };
+
+    // Add password only if provided
+    if (REDIS_PASSWORD) {
+      redisConfig.password = REDIS_PASSWORD;
+    }
+
+    client = new Redis(redisConfig);
 
     await client.ping();
     client.disconnect();
