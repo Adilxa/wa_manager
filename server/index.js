@@ -907,6 +907,13 @@ async function sendMessageWithHumanBehavior(accountId, jid, message) {
     throw new Error("Client not connected");
   }
 
+  if (!clientInfo.sock || typeof clientInfo.sock.sendMessage !== 'function') {
+    logger.error(`[sendMessage] Socket not available or sendMessage not a function for ${accountId}`);
+    throw new Error("Socket not properly initialized");
+  }
+
+  logger.debug(`[sendMessage] Client validated, sock available: ${!!clientInfo.sock}, sendMessage available: ${typeof clientInfo.sock.sendMessage}`);
+
   const account = await prisma.whatsAppAccount.findUnique({
     where: { id: accountId },
     select: { useLimits: true },
@@ -955,15 +962,18 @@ async function sendMessageWithHumanBehavior(accountId, jid, message) {
 
   logger.info(`[sendMessage] Actually sending message to ${jid}...`);
   try {
+    logger.debug(`[sendMessage] Calling sock.sendMessage for ${jid}`);
     const sentMessage = await Promise.race([
       clientInfo.sock.sendMessage(jid, { text: message }),
       new Promise((_, reject) => setTimeout(() => reject(new Error('Send timeout after 30s')), 30000))
     ]);
     clientInfo.lastActivity = Date.now();
-    logger.info(`[sendMessage] Message sent successfully to ${jid}`);
+    logger.info(`[sendMessage] ✅ Message sent successfully to ${jid}, messageId: ${sentMessage?.key?.id || 'unknown'}`);
     return sentMessage;
   } catch (error) {
-    logger.error(`[sendMessage] Failed to send to ${jid}:`, error.message, error.stack);
+    logger.error(`[sendMessage] ❌ Failed to send to ${jid}:`, error.message);
+    logger.error(`[sendMessage] Error stack:`, error.stack);
+    logger.error(`[sendMessage] Error type: ${error.constructor.name}`);
     throw error;
   }
 }
@@ -1040,8 +1050,8 @@ async function processMessageQueue(accountId) {
     }
 
     logger.info(`[Queue ${accountId}] Sending message to ${jid}...`);
-    await sendMessageWithHumanBehavior(accountId, jid, msg.message);
-    logger.info(`[Queue ${accountId}] Message sent successfully to ${jid}`);
+    const sentMsg = await sendMessageWithHumanBehavior(accountId, jid, msg.message);
+    logger.info(`[Queue ${accountId}] ✅ Message sent successfully to ${jid}, msgId: ${sentMsg?.key?.id || 'N/A'}`);
 
     // Extract contact number from JID (remove @suffix and device id)
     const contactNumber = jid.split("@")[0].split(":")[0];
@@ -2286,6 +2296,20 @@ async function restoreConnectedClients() {
         await initializeClient(account.id);
       } catch (error) {
         logger.error(`Failed to restore ${account.name}: ${error.message}`);
+
+        // If account not found, reset status in database
+        if (error.message === 'Account not found') {
+          try {
+            await prisma.whatsAppAccount.update({
+              where: { id: account.id },
+              data: { status: 'DISCONNECTED' }
+            });
+            logger.info(`Reset status for deleted account ${account.id}`);
+          } catch (updateError) {
+            // Account was deleted, ignore
+            logger.debug(`Could not update deleted account ${account.id}`);
+          }
+        }
       }
     }
 
