@@ -912,7 +912,28 @@ async function sendMessageWithHumanBehavior(accountId, jid, message) {
     throw new Error("Socket not properly initialized");
   }
 
-  logger.debug(`[sendMessage] Client validated, sock available: ${!!clientInfo.sock}, sendMessage available: ${typeof clientInfo.sock.sendMessage}`);
+  // Check if socket is authenticated
+  if (!clientInfo.sock.user || !clientInfo.sock.user.id) {
+    logger.error(`[sendMessage] Socket not authenticated for ${accountId}, user: ${JSON.stringify(clientInfo.sock.user)}`);
+    throw new Error("Socket not authenticated - client may need to reconnect");
+  }
+
+  // Check WebSocket connection state
+  const wsState = clientInfo.sock.ws?.readyState;
+  logger.debug(`[sendMessage] WebSocket state: ${wsState} (0=CONNECTING, 1=OPEN, 2=CLOSING, 3=CLOSED)`);
+
+  if (wsState !== 1) { // 1 = OPEN
+    logger.error(`[sendMessage] WebSocket not open for ${accountId}, state: ${wsState}`);
+    throw new Error(`WebSocket connection not ready (state: ${wsState})`);
+  }
+
+  logger.debug(`[sendMessage] Client validated for ${accountId}:`, {
+    sockAvailable: !!clientInfo.sock,
+    sendMessageAvailable: typeof clientInfo.sock.sendMessage,
+    authenticated: !!clientInfo.sock.user,
+    userId: clientInfo.sock.user?.id,
+    wsState
+  });
 
   const account = await prisma.whatsAppAccount.findUnique({
     where: { id: accountId },
@@ -961,19 +982,41 @@ async function sendMessageWithHumanBehavior(accountId, jid, message) {
   await sleep(randomDelay(200, 800));
 
   logger.info(`[sendMessage] Actually sending message to ${jid}...`);
+  const sendStartTime = Date.now();
+
   try {
-    logger.debug(`[sendMessage] Calling sock.sendMessage for ${jid}`);
+    logger.debug(`[sendMessage] Calling sock.sendMessage for ${jid} at ${new Date().toISOString()}`);
+
     const sentMessage = await Promise.race([
       clientInfo.sock.sendMessage(jid, { text: message }),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('Send timeout after 30s')), 30000))
+      new Promise((_, reject) =>
+        setTimeout(() => {
+          const elapsed = Date.now() - sendStartTime;
+          logger.error(`[sendMessage] ⏱️ TIMEOUT after ${elapsed}ms for ${jid}`);
+          logger.error(`[sendMessage] WebSocket state at timeout: ${clientInfo.sock?.ws?.readyState}`);
+          reject(new Error(`Send timeout after ${elapsed}ms - WebSocket may be frozen`));
+        }, 15000) // Reduced to 15 seconds
+      )
     ]);
+
+    const elapsed = Date.now() - sendStartTime;
     clientInfo.lastActivity = Date.now();
-    logger.info(`[sendMessage] ✅ Message sent successfully to ${jid}, messageId: ${sentMessage?.key?.id || 'unknown'}`);
+    logger.info(`[sendMessage] ✅ Message sent successfully to ${jid} in ${elapsed}ms, messageId: ${sentMessage?.key?.id || 'unknown'}`);
     return sentMessage;
   } catch (error) {
-    logger.error(`[sendMessage] ❌ Failed to send to ${jid}:`, error.message);
+    const elapsed = Date.now() - sendStartTime;
+    logger.error(`[sendMessage] ❌ Failed to send to ${jid} after ${elapsed}ms:`, error.message);
     logger.error(`[sendMessage] Error stack:`, error.stack);
     logger.error(`[sendMessage] Error type: ${error.constructor.name}`);
+    logger.error(`[sendMessage] Client status at failure: ${clientInfo.status}`);
+    logger.error(`[sendMessage] WebSocket state at failure: ${clientInfo.sock?.ws?.readyState}`);
+
+    // Mark client as potentially broken if timeout
+    if (error.message.includes('timeout') || error.message.includes('frozen')) {
+      logger.warn(`[sendMessage] Marking client ${accountId} as potentially broken due to timeout`);
+      clientInfo.status = 'DISCONNECTED';
+    }
+
     throw error;
   }
 }
@@ -1099,7 +1142,31 @@ async function processMessageQueue(accountId) {
       logger.info(`[Queue ${accountId}] Queue is now empty`);
     }
   } catch (error) {
-    logger.error(`[Queue ${accountId}] Failed to send message:`, error.message, error.stack);
+    logger.error(`[Queue ${accountId}] ❌ Failed to send message:`, error.message);
+    logger.error(`[Queue ${accountId}] Error stack:`, error.stack);
+
+    // Check if error is due to frozen/disconnected client
+    const isFrozenError = error.message.includes('timeout') ||
+                          error.message.includes('frozen') ||
+                          error.message.includes('WebSocket') ||
+                          error.message.includes('not authenticated') ||
+                          error.message.includes('not ready');
+
+    if (isFrozenError) {
+      logger.warn(`[Queue ${accountId}] 🔄 Client appears frozen/disconnected, attempting reconnect...`);
+      try {
+        await cleanupClient(accountId);
+        await sleep(2000);
+        await initializeClient(accountId);
+        logger.info(`[Queue ${accountId}] ✅ Client reconnected successfully`);
+
+        // Retry immediately with reconnected client
+        setTimeout(() => processMessageQueue(accountId), 3000);
+        return;
+      } catch (reconnectError) {
+        logger.error(`[Queue ${accountId}] Failed to reconnect:`, reconnectError.message);
+      }
+    }
 
     const msg = queue[0];
     if (msg) {
@@ -1122,7 +1189,7 @@ async function processMessageQueue(accountId) {
         queue.shift();
 
         if (queue.length > 0) {
-          logger.info(`[Queue ${accountId}] Retrying next message in 2s`);
+          logger.info(`[Queue ${accountId}] Processing next message in 2s`);
           setTimeout(() => processMessageQueue(accountId), 2000);
         }
       } else {
