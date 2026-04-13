@@ -945,16 +945,58 @@ async function sendMessageWithHumanBehavior(accountId, jid, message) {
   // No limits - send immediately
   if (account && !account.useLimits) {
     logger.info(`[sendMessage] Sending immediately (no limits) to ${jid}`);
+
+    // Log EVERYTHING about the sock state before sending
+    logger.info(`[sendMessage] 🔍 DETAILED SOCK STATE:`, {
+      hasSock: !!clientInfo.sock,
+      hasSendMessage: typeof clientInfo.sock?.sendMessage,
+      hasUser: !!clientInfo.sock?.user,
+      userId: clientInfo.sock?.user?.id,
+      userName: clientInfo.sock?.user?.name,
+      hasWs: !!clientInfo.sock?.ws,
+      wsReadyState: clientInfo.sock?.ws?.readyState,
+      wsReadyStateStr: clientInfo.sock?.ws?.readyState === 0 ? 'CONNECTING' :
+                       clientInfo.sock?.ws?.readyState === 1 ? 'OPEN' :
+                       clientInfo.sock?.ws?.readyState === 2 ? 'CLOSING' :
+                       clientInfo.sock?.ws?.readyState === 3 ? 'CLOSED' : 'UNKNOWN',
+      authState: clientInfo.sock?.authState ? 'exists' : 'missing',
+      messageLength: message.length,
+      targetJid: jid
+    });
+
     try {
+      logger.info(`[sendMessage] 🚀 CALLING sock.sendMessage NOW at ${new Date().toISOString()}`);
+      const sendStartTime = Date.now();
+
       const sentMessage = await Promise.race([
-        clientInfo.sock.sendMessage(jid, { text: message }),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('Send timeout')), 30000))
+        (async () => {
+          logger.info(`[sendMessage] ⏳ Promise.race: sock.sendMessage started`);
+          const result = await clientInfo.sock.sendMessage(jid, { text: message });
+          logger.info(`[sendMessage] ✅ Promise.race: sock.sendMessage returned after ${Date.now() - sendStartTime}ms`);
+          return result;
+        })(),
+        new Promise((_, reject) => setTimeout(() => {
+          const elapsed = Date.now() - sendStartTime;
+          logger.error(`[sendMessage] ⏱️ TIMEOUT after ${elapsed}ms for ${jid}`);
+          logger.error(`[sendMessage] WS state at timeout: ${clientInfo.sock?.ws?.readyState}`);
+          logger.error(`[sendMessage] User at timeout: ${clientInfo.sock?.user?.id}`);
+          reject(new Error(`Send timeout after ${elapsed}ms`));
+        }, 10000)) // Reduced to 10 seconds
       ]);
+
+      const elapsed = Date.now() - sendStartTime;
       clientInfo.lastActivity = Date.now();
-      logger.info(`[sendMessage] Message sent successfully to ${jid}`);
+      logger.info(`[sendMessage] ✅ Message sent successfully to ${jid} in ${elapsed}ms, messageId: ${sentMessage?.key?.id || 'unknown'}`);
       return sentMessage;
     } catch (error) {
-      logger.error(`[sendMessage] Failed to send to ${jid}:`, error.message, error.stack);
+      logger.error(`[sendMessage] ❌ SEND FAILED:`, {
+        error: error.message,
+        errorType: error.constructor.name,
+        jid: jid,
+        wsState: clientInfo.sock?.ws?.readyState,
+        userId: clientInfo.sock?.user?.id,
+        stack: error.stack
+      });
       throw error;
     }
   }
