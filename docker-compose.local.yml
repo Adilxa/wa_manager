@@ -1,19 +1,4 @@
 services:
-  traefik:
-    image: traefik:v3.0
-    container_name: wa-traefik
-    restart: unless-stopped
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
-      - ./traefik/dynamic.yml:/etc/traefik/dynamic.yml:ro
-      - traefik_acme:/acme
-    networks:
-      - wa-network
-
   postgres:
     image: postgres:16-alpine
     container_name: wa-postgres
@@ -27,8 +12,6 @@ services:
       PGDATA: /var/lib/postgresql/data/pgdata
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    networks:
-      - wa-network
     # PostgreSQL configuration for stable long-running connections
     command: >
       postgres
@@ -52,8 +35,6 @@ services:
       - "6379:6379"
     volumes:
       - redis_data:/data
-    networks:
-      - wa-network
     command: >
       redis-server
       --appendonly yes
@@ -100,28 +81,15 @@ services:
       NEXT_PUBLIC_USE_WEBSOCKET: ${NEXT_PUBLIC_USE_WEBSOCKET:-false}
       API_PORT: 5001
       API_SECRET_KEY: ${API_SECRET_KEY}
-      NODE_ENV: production
+      NODE_ENV: development
       # Enable Node.js optimizations
       UV_THREADPOOL_SIZE: 4
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.wa-app.rule=Host(`ilovesanzhar.click`)"
-      - "traefik.http.routers.wa-app.entrypoints=websecure"
-      - "traefik.http.routers.wa-app.tls.certresolver=letsencrypt"
-      - "traefik.http.routers.wa-app.service=wa-app"
-      - "traefik.http.services.wa-app.loadbalancer.server.port=3000"
-      # WebSocket routing
-      - "traefik.http.routers.wa-api.rule=Host(`ilovesanzhar.click`) && PathPrefix(`/api`, `/socket.io`)"
-      - "traefik.http.routers.wa-api.entrypoints=websecure"
-      - "traefik.http.routers.wa-api.tls.certresolver=letsencrypt"
-      - "traefik.http.routers.wa-api.service=wa-api"
-      - "traefik.http.services.wa-api.loadbalancer.server.port=5001"
-      - "traefik.http.services.wa-api.loadbalancer.sticky.cookie.name=server_id"
+      # Telegram (optional for local dev)
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
     volumes:
       - baileys_auth:/app/.baileys_auth
       - wa_logs:/app/logs
-    networks:
-      - wa-network
     # Graceful shutdown timeout (45 seconds)
     stop_grace_period: 45s
     healthcheck:
@@ -156,18 +124,6 @@ services:
         delay: 5s
         max_attempts: 20
         window: 120s
-    # Дополнительная безопасность
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
-    cap_add:
-      - NET_BIND_SERVICE
-    # Block malicious domains (virus protection)
-    extra_hosts:
-      - "repositorylinux.publicvm.com:127.0.0.1"
-      - "publicvm.com:127.0.0.1"
-      - "linux.publicvm.com:127.0.0.1"
 
 volumes:
   postgres_data:
@@ -178,9 +134,3 @@ volumes:
     driver: local
   wa_logs:
     driver: local
-  traefik_acme:
-    driver: local
-
-networks:
-  wa-network:
-    driver: bridge

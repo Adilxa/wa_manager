@@ -16,7 +16,12 @@
       "Bash(dir:*)",
       "Bash(npm run dev:server:*)",
       "Bash(pkill:*)",
-      "Bash(redis-cli:*)"
+      "Bash(redis-cli:*)",
+      "Bash(npm install:*)",
+      "Bash(docker-compose logs:*)",
+      "Bash(docker-compose ps:*)",
+      "Bash(docker-compose:*)",
+      "Bash(jq:*)"
     ],
     "deny": [],
     "ask": []

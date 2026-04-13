@@ -1,5 +1,6 @@
 const express = require("express");
 const cors = require("cors");
+const { createServer } = require("http");
 const { PrismaClient } = require("@prisma/client");
 const QRCode = require("qrcode");
 const fs = require("fs");
@@ -7,6 +8,7 @@ const path = require("path");
 const pino = require("pino");
 const { contractQueue, messageQueue } = require("./queue");
 const { initializeWorkers } = require("./workers");
+const { initSocketIO } = require("./socket");
 
 const {
   default: makeWASocket,
@@ -314,6 +316,18 @@ async function updateAccountStatus(accountId, status, data = {}) {
       data: { status, ...data },
     });
     logger.info(`Status updated: ${accountId} -> ${status}`);
+
+    // WebSocket emit for real-time status updates
+    if (global.io) {
+      global.io.of('/accounts')
+        .to(`account:${accountId}`)
+        .emit('account:status', {
+          accountId,
+          status,
+          phoneNumber: data.phoneNumber || null,
+          timestamp: new Date().toISOString()
+        });
+    }
   } catch (error) {
     logger.error(`Failed to update status for ${accountId}:`, error.message);
   }
@@ -1166,6 +1180,19 @@ async function initializeClient(accountId) {
           clientInfo.qrCode = qrDataUrl;
           clientInfo.status = "QR_READY";
           await updateAccountStatus(accountId, "QR_READY", { qrCode: qrDataUrl });
+
+          // WebSocket emit for real-time QR delivery
+          if (global.io) {
+            global.io.of('/qr')
+              .to(`account:${accountId}`)
+              .emit('qr:generated', {
+                accountId,
+                qrCode: qrDataUrl,
+                expiresIn: 45,
+                timestamp: new Date().toISOString()
+              });
+          }
+
           logger.info(`QR ready for ${accountId}`);
         } catch (error) {
           logger.error(`QR generation failed for ${accountId}:`, error.message);
@@ -1265,7 +1292,7 @@ async function initializeClient(accountId) {
           // For direct chats or outgoing messages, use chatId
           const contactNumber = senderNumber || chatId.split("@")[0];
 
-          await prisma.message.create({
+          const dbMessage = await prisma.message.create({
             data: {
               accountId,
               chatId,
@@ -1278,6 +1305,17 @@ async function initializeClient(accountId) {
               contactName: msg.pushName || null,
             },
           });
+
+          // WebSocket emit for real-time message delivery
+          if (global.io) {
+            global.io.of('/chats')
+              .to(`account:${accountId}`)
+              .emit('chat:message:new', {
+                accountId,
+                chatId,
+                message: dbMessage
+              });
+          }
 
           // Log for debugging group messages
           if (isGroup) {
@@ -2141,6 +2179,24 @@ app.get("/health", (req, res) => {
   });
 });
 
+// WebSocket health check
+app.get("/health/websocket", (req, res) => {
+  if (!global.io) {
+    return res.status(503).json({ error: 'WebSocket not initialized' });
+  }
+
+  res.json({
+    status: 'healthy',
+    connections: global.io.engine.clientsCount,
+    namespaces: {
+      accounts: global.io.of('/accounts').sockets.size,
+      chats: global.io.of('/chats').sockets.size,
+      qr: global.io.of('/qr').sockets.size
+    },
+    timestamp: new Date().toISOString()
+  });
+});
+
 // ==================== SERVER LIFECYCLE ====================
 
 async function restoreConnectedClients() {
@@ -2284,9 +2340,21 @@ setInterval(() => {
 // ==================== SERVER START ====================
 
 const PORT = process.env.API_PORT || 5001;
-const server = app.listen(PORT, async () => {
+const httpServer = createServer(app);
+let io;
+
+const server = httpServer.listen(PORT, async () => {
   logger.info(`WhatsApp API Server on port ${PORT}`);
   logger.info(`Max clients: ${CONFIG.MAX_CLIENTS}`);
+
+  // Initialize Socket.IO
+  try {
+    io = await initSocketIO(httpServer, { clients, prisma, logger, CONFIG });
+    global.io = io;
+    logger.info('Socket.IO initialized successfully');
+  } catch (error) {
+    logger.error('Failed to initialize Socket.IO:', error);
+  }
 
   initializeWorkers({
     clients,

@@ -17,6 +17,7 @@ import {
   User,
   Loader2,
 } from 'lucide-react';
+import { socketManager } from '@/lib/socket';
 
 interface Account {
   id: string;
@@ -93,16 +94,42 @@ export default function ChatPage() {
     // Загружаем чаты сразу
     loadChats(accountId);
 
-    // Создаем интервал для обновления
-    const interval = setInterval(() => {
-      loadChats(accountId);
-    }, 5000);
+    // Если WebSocket включен - подписаться
+    if (socketManager.isEnabled()) {
+      const socket = socketManager.getSocket('/chats');
+      socket.emit('join', accountId);
 
-    chatsIntervalRef.current = interval;
+      socket.on('chat:message:new', (data: any) => {
+        if (data.accountId === accountId) {
+          setChats(prevChats =>
+            prevChats.map(chat =>
+              chat.chatId === data.chatId
+                ? { ...chat, lastMessage: data.message.message, lastMessageTime: data.message.sentAt }
+                : chat
+            )
+          );
+        }
+      });
 
-    return () => {
-      if (interval) clearInterval(interval);
-    };
+      socket.on('chat:list:updated', () => loadChats(accountId));
+
+      return () => {
+        socket.emit('leave', accountId);
+        socket.off('chat:message:new');
+        socket.off('chat:list:updated');
+      };
+    } else {
+      // Fallback: polling (для постепенной миграции)
+      const interval = setInterval(() => {
+        loadChats(accountId);
+      }, 5000);
+
+      chatsIntervalRef.current = interval;
+
+      return () => {
+        if (interval) clearInterval(interval);
+      };
+    }
   }, [selectedAccount?.id]);
 
   // Загрузка сообщений при выборе чата
@@ -121,16 +148,31 @@ export default function ChatPage() {
     // Загружаем сообщения сразу
     loadMessages(accountId, chatId);
 
-    // Создаем интервал для обновления
-    const interval = setInterval(() => {
-      loadMessages(accountId, chatId);
-    }, 3000);
+    // Если WebSocket включен - подписаться
+    if (socketManager.isEnabled()) {
+      const socket = socketManager.getSocket('/chats');
 
-    messagesIntervalRef.current = interval;
+      socket.on('chat:message:new', (data: any) => {
+        if (data.accountId === accountId && data.chatId === chatId) {
+          setMessages(prevMessages => [...prevMessages, data.message]);
+        }
+      });
 
-    return () => {
-      if (interval) clearInterval(interval);
-    };
+      return () => {
+        socket.off('chat:message:new');
+      };
+    } else {
+      // Fallback: polling
+      const interval = setInterval(() => {
+        loadMessages(accountId, chatId);
+      }, 3000);
+
+      messagesIntervalRef.current = interval;
+
+      return () => {
+        if (interval) clearInterval(interval);
+      };
+    }
   }, [selectedChat?.chatId, selectedAccount?.id]);
 
   // Автоскролл к последнему сообщению
