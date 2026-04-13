@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Plus,
@@ -14,20 +14,16 @@ import {
   Loader2,
   Smartphone,
   Clock,
-  User,
-  Hash,
   RefreshCw,
   Copy,
-  Zap,
   Activity,
   Shield,
   MessageSquare,
   Wifi,
   WifiOff,
-  Settings,
-  MoreVertical,
   X
 } from 'lucide-react';
+import { useAccounts, useQRCode } from '@/lib/hooks/useWebSocket';
 
 interface Account {
   id: string;
@@ -41,12 +37,21 @@ interface Account {
   createdAt: string;
 }
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
-
 export default function Dashboard() {
   const router = useRouter();
-  const [accounts, setAccounts] = useState<Account[]>([]);
-  const [loading, setLoading] = useState(true);
+  const {
+    accounts,
+    loading,
+    error: accountsError,
+    refresh,
+    createAccount: createAccountWS,
+    connectAccount: connectAccountWS,
+    disconnectAccount: disconnectAccountWS,
+    resetAccount,
+    deleteAccount: deleteAccountWS,
+    updateAccount,
+  } = useAccounts();
+
   const [refreshing, setRefreshing] = useState(false);
   const [regeneratingQR, setRegeneratingQR] = useState(false);
   const [newAccountName, setNewAccountName] = useState('');
@@ -56,8 +61,8 @@ export default function Dashboard() {
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
 
-  const accountsRef = useRef<Account[]>([]);
-  const isLoadingRef = useRef(false);
+  // Use QR hook for selected account
+  const { qrCode: realtimeQRCode } = useQRCode(selectedAccount?.id || null);
 
   // Toast notification
   const showToast = (message: string, type: 'success' | 'error' | 'info' = 'info') => {
@@ -72,51 +77,15 @@ export default function Dashboard() {
     }
   }, [router]);
 
-  const loadAccounts = async (showRefreshIndicator = false) => {
-    if (isLoadingRef.current && !showRefreshIndicator) return;
-
-    isLoadingRef.current = true;
-    if (showRefreshIndicator) setRefreshing(true);
-
-    try {
-      const response = await fetch(`${API_URL}/api/accounts`, {
-        cache: 'no-store',
-        headers: { 'Cache-Control': 'no-cache' },
-      });
-
-      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-
-      const data = await response.json();
-      accountsRef.current = data;
-      setAccounts(data);
-
-      // Update selected account if it exists
-      if (selectedAccount) {
-        const updated = data.find((a: Account) => a.id === selectedAccount.id);
-        if (updated) setSelectedAccount(updated);
-      }
-    } catch (error) {
-      console.error('Failed to load accounts:', error);
-    } finally {
-      setLoading(false);
-      isLoadingRef.current = false;
-      if (showRefreshIndicator) setRefreshing(false);
-    }
-  };
-
+  // Update selected account when accounts change
   useEffect(() => {
-    loadAccounts();
-
-    const interval = setInterval(() => {
-      const currentAccounts = accountsRef.current;
-      const hasConnectingAccounts = currentAccounts.some(
-        acc => ['CONNECTING', 'AUTHENTICATING', 'QR_READY'].includes(acc.clientStatus)
-      );
-      if (hasConnectingAccounts) loadAccounts();
-    }, 5000);
-
-    return () => clearInterval(interval);
-  }, []);
+    if (selectedAccount) {
+      const updated = accounts.find((a) => a.id === selectedAccount.id);
+      if (updated) {
+        setSelectedAccount(updated);
+      }
+    }
+  }, [accounts, selectedAccount]);
 
   const createAccount = async () => {
     if (!newAccountName.trim()) {
@@ -125,67 +94,38 @@ export default function Dashboard() {
     }
 
     try {
-      const response = await fetch(`${API_URL}/api/accounts`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: newAccountName.trim(), useLimits }),
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ error: 'Failed to create account' }));
-        throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
-      }
-
-      const newAccount = await response.json();
+      const newAccount = await createAccountWS(newAccountName.trim(), useLimits);
       setNewAccountName('');
       setUseLimits(true);
       setShowCreateForm(false);
-      await loadAccounts(true);
       setSelectedAccount(newAccount);
       showToast('Account created successfully!', 'success');
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to create account:', error);
-      showToast('Failed to create account', 'error');
+      showToast(error.message || 'Failed to create account', 'error');
     }
   };
 
   const connectAccount = async (accountId: string) => {
     try {
-      const response = await fetch(`${API_URL}/api/accounts/${accountId}/connect`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-      });
-
-      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-
-      await loadAccounts(true);
+      await connectAccountWS(accountId);
       showToast('Connecting...', 'info');
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to connect:', error);
-      showToast('Failed to connect account', 'error');
+      showToast(error.message || 'Failed to connect account', 'error');
     }
   };
 
   const regenerateQR = async (accountId: string) => {
     setRegeneratingQR(true);
     try {
-      await fetch(`${API_URL}/api/accounts/${accountId}/disconnect`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-      });
-
+      await disconnectAccountWS(accountId);
       await new Promise(resolve => setTimeout(resolve, 1000));
-
-      await fetch(`${API_URL}/api/accounts/${accountId}/connect`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-      });
-
-      await loadAccounts(true);
+      await connectAccountWS(accountId);
       showToast('QR Code regenerated!', 'success');
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to regenerate QR:', error);
-      showToast('Failed to regenerate QR code', 'error');
+      showToast(error.message || 'Failed to regenerate QR code', 'error');
     } finally {
       setRegeneratingQR(false);
     }
@@ -193,39 +133,23 @@ export default function Dashboard() {
 
   const disconnectAccount = async (accountId: string) => {
     try {
-      const response = await fetch(`${API_URL}/api/accounts/${accountId}/disconnect`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-      });
-
-      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-
-      await loadAccounts(true);
+      await disconnectAccountWS(accountId);
       if (selectedAccount?.id === accountId) setSelectedAccount(null);
       showToast('Account disconnected', 'success');
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to disconnect:', error);
-      showToast('Failed to disconnect account', 'error');
+      showToast(error.message || 'Failed to disconnect account', 'error');
     }
   };
 
   const toggleUseLimits = async (accountId: string, currentValue: boolean) => {
     try {
-      const response = await fetch(`${API_URL}/api/accounts/${accountId}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ useLimits: !currentValue }),
-      });
-
-      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-
-      const updatedAccount = await response.json();
-      await loadAccounts(true);
-      if (selectedAccount?.id === accountId) setSelectedAccount(updatedAccount);
+      const updated = await updateAccount(accountId, { useLimits: !currentValue });
+      if (selectedAccount?.id === accountId) setSelectedAccount(updated);
       showToast(`Rate limits ${!currentValue ? 'enabled' : 'disabled'}`, 'success');
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to toggle limits:', error);
-      showToast('Failed to update rate limits', 'error');
+      showToast(error.message || 'Failed to update rate limits', 'error');
     }
   };
 
@@ -243,19 +167,12 @@ export default function Dashboard() {
     if (!confirm('Are you sure you want to delete this account?')) return;
 
     try {
-      const response = await fetch(`${API_URL}/api/accounts/${accountId}`, {
-        method: 'DELETE',
-        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-      });
-
-      if (!response.ok) throw new Error('Failed to delete');
-
-      await loadAccounts(true);
+      await deleteAccountWS(accountId);
       if (selectedAccount?.id === accountId) setSelectedAccount(null);
       showToast('Account deleted', 'success');
     } catch (error: any) {
       console.error('Failed to delete account:', error);
-      showToast(`Failed to delete: ${error.message}`, 'error');
+      showToast(error.message || 'Failed to delete account', 'error');
     }
   };
 
@@ -278,19 +195,11 @@ export default function Dashboard() {
     }
 
     try {
-      const response = await fetch(`${API_URL}/api/messages/send`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ accountId: selectedAccount.id, to, message }),
-      });
-
-      const data = await response.json();
-      if (response.ok) {
-        e.currentTarget.reset();
-        showToast('Message sent!', 'success');
-      } else {
-        throw new Error(data.error || 'Failed to send message');
-      }
+      // Use WebSocket to send message
+      const { chatsSocket } = await import('@/lib/socket');
+      await chatsSocket.send(selectedAccount.id, to, message);
+      e.currentTarget.reset();
+      showToast('Message queued for delivery!', 'success');
     } catch (error: any) {
       console.error('Failed to send message:', error);
       showToast(error.message || 'Failed to send message', 'error');
@@ -372,7 +281,11 @@ export default function Dashboard() {
 
           <div className="flex items-center gap-3">
             <button
-              onClick={() => loadAccounts(true)}
+              onClick={async () => {
+                setRefreshing(true);
+                await refresh();
+                setRefreshing(false);
+              }}
               disabled={refreshing}
               className="p-2.5 rounded-xl bg-gray-900 border border-gray-800 text-gray-400 hover:text-white hover:border-gray-700 transition disabled:opacity-50"
             >
@@ -662,8 +575,8 @@ export default function Dashboard() {
                     </button>
                   </div>
 
-                  {/* QR Code */}
-                  {selectedAccount.qrCode && (
+                  {/* QR Code - Real-time via WebSocket */}
+                  {(realtimeQRCode || selectedAccount.qrCode) && (
                     <div className="bg-black/50 rounded-xl p-4 text-center border border-gray-800">
                       <div className="flex items-center justify-between mb-4">
                         <h4 className="font-semibold flex items-center gap-2 text-sm">
@@ -680,7 +593,7 @@ export default function Dashboard() {
                         </button>
                       </div>
                       <div className="inline-block p-3 bg-white rounded-xl">
-                        <img src={selectedAccount.qrCode} alt="QR Code" className="w-44 h-44" />
+                        <img src={realtimeQRCode || selectedAccount.qrCode || ''} alt="QR Code" className="w-44 h-44" />
                       </div>
                       <p className="text-xs text-gray-500 mt-3">
                         WhatsApp &rarr; Settings &rarr; Linked Devices

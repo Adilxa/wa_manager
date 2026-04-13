@@ -3,7 +3,18 @@ const { createAdapter } = require('@socket.io/redis-adapter');
 const Redis = require('ioredis');
 
 async function initSocketIO(httpServer, dependencies) {
-  const { clients, prisma, logger } = dependencies;
+  const {
+    clients,
+    prisma,
+    logger,
+    initializeClient,
+    cleanupClient,
+    enqueueMessage,
+    processMessageQueue,
+    messageQueues,
+    connectingAccounts,
+    reconnectAttempts
+  } = dependencies;
 
   const io = new Server(httpServer, {
     cors: {
@@ -15,7 +26,7 @@ async function initSocketIO(httpServer, dependencies) {
     pingInterval: 25000
   });
 
-  // Redis adapter for future scaling
+  // Redis adapter for horizontal scaling
   const pubClient = new Redis({
     host: process.env.REDIS_HOST || 'redis',
     port: parseInt(process.env.REDIS_PORT || '6379'),
@@ -28,15 +39,31 @@ async function initSocketIO(httpServer, dependencies) {
 
   logger.info('Socket.IO initialized with Redis adapter');
 
-  // Initialize namespaces
-  require('./namespaces/accounts')(io, { clients, prisma, logger });
-  require('./namespaces/chats')(io, { clients, prisma, logger });
-  require('./namespaces/qr')(io, { clients, prisma, logger });
+  // Prepare dependencies for namespaces
+  const namespaceDeps = {
+    clients,
+    prisma,
+    logger,
+    initializeClient,
+    cleanupClient,
+    enqueueMessage,
+    processMessageQueue,
+    messageQueues,
+    connectingAccounts,
+    reconnectAttempts
+  };
+
+  // Initialize namespaces with full dependencies
+  require('./namespaces/accounts')(io, namespaceDeps);
+  require('./namespaces/chats')(io, namespaceDeps);
+  require('./namespaces/qr')(io, namespaceDeps);
 
   // Global error handler
   io.on('error', (error) => {
     logger.error('Socket.IO error:', error);
   });
+
+  logger.info('All WebSocket namespaces initialized');
 
   return io;
 }

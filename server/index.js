@@ -2347,9 +2347,21 @@ const server = httpServer.listen(PORT, async () => {
   logger.info(`WhatsApp API Server on port ${PORT}`);
   logger.info(`Max clients: ${CONFIG.MAX_CLIENTS}`);
 
-  // Initialize Socket.IO
+  // Initialize Socket.IO with all dependencies
   try {
-    io = await initSocketIO(httpServer, { clients, prisma, logger, CONFIG });
+    io = await initSocketIO(httpServer, {
+      clients,
+      prisma,
+      logger,
+      CONFIG,
+      initializeClient,
+      cleanupClient,
+      enqueueMessage,
+      processMessageQueue,
+      messageQueues,
+      connectingAccounts,
+      reconnectAttempts
+    });
     global.io = io;
     logger.info('Socket.IO initialized successfully');
   } catch (error) {

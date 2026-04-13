@@ -13,13 +13,24 @@ services:
       - traefik_acme:/acme
     networks:
       - wa-network
+    # Security hardening
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+      - CHOWN
+      - SETGID
+      - SETUID
 
   postgres:
     image: postgres:16-alpine
     container_name: wa-postgres
     restart: unless-stopped
-    ports:
-      - "5433:5432"
+    # NO EXTERNAL PORTS - internal network only
+    expose:
+      - "5432"
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
@@ -43,13 +54,25 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    # Security hardening
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - SETUID
+      - SETGID
+      - FOWNER
 
   redis:
     image: redis:7-alpine
     container_name: wa-redis
     restart: unless-stopped
-    ports:
-      - "6379:6379"
+    # NO EXTERNAL PORTS - internal network only
+    expose:
+      - "6379"
     volumes:
       - redis_data:/data
     networks:
@@ -61,6 +84,8 @@ services:
       --maxmemory 256mb
       --maxmemory-policy noeviction
       --requirepass ${REDIS_PASSWORD:-adilhankrasavchikvoobshebomba}
+      --bind 0.0.0.0
+      --protected-mode yes
     healthcheck:
       test:
         [
@@ -73,6 +98,14 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    # Security hardening
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - SETGID
+      - SETUID
 
   wa-manager:
     build:
@@ -85,9 +118,10 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    ports:
-      - "3000:3000"
-      - "5001:5001"
+    # NO EXTERNAL PORTS - Traefik handles all traffic
+    expose:
+      - "3000"
+      - "5001"
     environment:
       # Prisma connection pool: 10 connections (reduced to save memory)
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/wa_manager?schema=public&connection_limit=10&pool_timeout=10&connect_timeout=30

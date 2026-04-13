@@ -21,7 +21,8 @@
       "Bash(docker-compose logs:*)",
       "Bash(docker-compose ps:*)",
       "Bash(docker-compose:*)",
-      "Bash(jq:*)"
+      "Bash(jq:*)",
+      "Bash(ls:*)"
     ],
     "deny": [],
     "ask": []
