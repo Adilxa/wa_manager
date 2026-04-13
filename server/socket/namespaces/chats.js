@@ -309,6 +309,82 @@ module.exports = function(io, dependencies) {
           }
         }
 
+        // Check if account has useLimits disabled - send DIRECTLY without queue
+        const account = await prisma.whatsAppAccount.findUnique({
+          where: { id: accountId },
+          select: { useLimits: true }
+        });
+
+        // Format JID
+        let jid = to;
+        if (!to.includes('@')) {
+          jid = `${to}@s.whatsapp.net`;
+        }
+
+        // DIRECT SEND without queue when useLimits is false
+        if (account && !account.useLimits) {
+          logger.info(`[Chats NS] 🚀 DIRECT SEND (no limits) to ${jid}`);
+
+          try {
+            // Log sock state before sending
+            logger.info(`[Chats NS] 📊 Sock state:`, JSON.stringify({
+              hasSock: !!clientInfo.sock,
+              hasSendMessage: typeof clientInfo.sock?.sendMessage === 'function',
+              hasUser: !!clientInfo.sock?.user,
+              userId: clientInfo.sock?.user?.id,
+              status: clientInfo.status
+            }));
+
+            const sendStart = Date.now();
+            logger.info(`[Chats NS] ⏱️ Starting sock.sendMessage at ${new Date().toISOString()}`);
+
+            // Direct send with timeout
+            const sentMessage = await Promise.race([
+              clientInfo.sock.sendMessage(jid, { text: message }),
+              new Promise((_, reject) => {
+                setTimeout(() => {
+                  logger.error(`[Chats NS] ⏱️ TIMEOUT after 8s`);
+                  reject(new Error('Send timeout after 8000ms'));
+                }, 8000);
+              })
+            ]);
+
+            const elapsed = Date.now() - sendStart;
+            logger.info(`[Chats NS] ✅ Message sent in ${elapsed}ms, id: ${sentMessage?.key?.id}`);
+
+            // Save to database
+            const contactNumber = jid.split('@')[0].split(':')[0];
+            await prisma.message.create({
+              data: {
+                accountId,
+                chatId: jid,
+                direction: 'OUTGOING',
+                message: message,
+                to: contactNumber,
+                status: 'SENT',
+                contactNumber,
+              },
+            });
+
+            return callback({
+              success: true,
+              messageId: sentMessage?.key?.id,
+              message: 'Message sent successfully',
+            });
+
+          } catch (sendError) {
+            logger.error(`[Chats NS] ❌ Direct send failed:`, sendError.message);
+            logger.error(`[Chats NS] Error stack:`, sendError.stack);
+
+            // Return error to client
+            return callback({
+              success: false,
+              error: sendError.message,
+            });
+          }
+        }
+
+        // With limits - use queue
         const messageId = enqueueMessage(accountId, to, message);
         const queue = messageQueues.get(accountId) || [];
 
@@ -329,7 +405,7 @@ module.exports = function(io, dependencies) {
         logger.info('[Chats NS] Sending response:', response);
         callback(response);
       } catch (error) {
-        logger.error('[Chats NS] Failed to queue message:', error.message, error.stack);
+        logger.error('[Chats NS] Failed to send message:', error.message, error.stack);
         if (callback) {
           callback({ success: false, error: error.message });
         }
