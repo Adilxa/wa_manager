@@ -26,8 +26,21 @@ module.exports = function(io, dependencies) {
     });
 
     // Get all chats for an account
-    socket.on('chats:list', async ({ accountId, page = 1, limit = 50, phone }, callback) => {
+    socket.on('chats:list', async (...args) => {
+      logger.info('[Chats NS] Received chats:list, args:', args.length, 'types:', args.map(a => typeof a));
+
+      const callback = typeof args[args.length - 1] === 'function' ? args[args.length - 1] : null;
+      const data = args[0] || {};
+
+      if (!callback) {
+        logger.warn('[Chats NS] No callback provided for chats:list');
+        return;
+      }
+
+      const { accountId, page = 1, limit = 50, phone } = data;
+
       try {
+        logger.info(`[Chats NS] Fetching chats for account: ${accountId}, page: ${page}, limit: ${limit}`);
         const pageNum = parseInt(page);
         const limitNum = Math.min(parseInt(limit), 100);
         const skip = (pageNum - 1) * limitNum;
@@ -82,7 +95,9 @@ module.exports = function(io, dependencies) {
         const paginatedChats = chatsArray.slice(skip, skip + limitNum);
         const totalPages = Math.ceil(total / limitNum);
 
-        callback({
+        logger.info(`[Chats NS] Found ${total} chats, returning ${paginatedChats.length} for page ${pageNum}`);
+
+        const response = {
           success: true,
           data: paginatedChats,
           pagination: {
@@ -93,16 +108,34 @@ module.exports = function(io, dependencies) {
             hasNextPage: pageNum < totalPages,
             hasPrevPage: pageNum > 1,
           },
-        });
+        };
+
+        callback(response);
       } catch (error) {
-        logger.error('[Chats NS] Failed to get chats:', error.message);
-        callback({ success: false, error: error.message });
+        logger.error('[Chats NS] Failed to get chats:', error.message, error.stack);
+        if (callback) {
+          callback({ success: false, error: error.message });
+        }
       }
     });
 
     // Get messages for a specific chat
-    socket.on('chat:messages', async ({ accountId, chatId }, callback) => {
+    socket.on('chat:messages', async (...args) => {
+      logger.info('[Chats NS] Received chat:messages, args:', args.length, 'types:', args.map(a => typeof a));
+
+      const callback = typeof args[args.length - 1] === 'function' ? args[args.length - 1] : null;
+      const data = args[0] || {};
+
+      if (!callback) {
+        logger.warn('[Chats NS] No callback provided for chat:messages');
+        return;
+      }
+
+      const { accountId, chatId } = data;
+
       try {
+        logger.info(`[Chats NS] Fetching messages for chat: ${chatId}, account: ${accountId}`);
+
         const decodedChatId = decodeURIComponent(chatId);
 
         const messages = await prisma.message.findMany({
@@ -111,19 +144,38 @@ module.exports = function(io, dependencies) {
           take: 500,
         });
 
+        logger.info(`[Chats NS] Found ${messages.length} messages for chat ${chatId}`);
+
         callback({ success: true, data: messages });
       } catch (error) {
-        logger.error('[Chats NS] Failed to get chat messages:', error.message);
-        callback({ success: false, error: error.message });
+        logger.error('[Chats NS] Failed to get chat messages:', error.message, error.stack);
+        if (callback) {
+          callback({ success: false, error: error.message });
+        }
       }
     });
 
     // Send message to a chat
-    socket.on('chat:send', async ({ accountId, chatId, message }, callback) => {
+    socket.on('chat:send', async (...args) => {
+      logger.info('[Chats NS] Received chat:send, args:', args.length, 'types:', args.map(a => typeof a));
+
+      const callback = typeof args[args.length - 1] === 'function' ? args[args.length - 1] : null;
+      const data = args[0] || {};
+
+      if (!callback) {
+        logger.warn('[Chats NS] No callback provided for chat:send');
+        return;
+      }
+
+      const { accountId, chatId, message } = data;
+
       try {
+        logger.info(`[Chats NS] Sending to chat: ${chatId}, account: ${accountId}`);
+
         const decodedChatId = decodeURIComponent(chatId);
 
         if (!message) {
+          logger.error('[Chats NS] Message is required');
           return callback({ success: false, error: 'Message is required' });
         }
 
@@ -171,30 +223,53 @@ module.exports = function(io, dependencies) {
 
         const messageId = enqueueMessage(accountId, contactNumber, message);
 
+        logger.info(`[Chats NS] Chat message queued: ${messageId}, contact: ${contactNumber}, queue length: ${queueLength + 1}`);
+
         if (queueLength === 0) {
           setTimeout(() => processMessageQueue(accountId), 100);
         }
 
-        callback({
+        const response = {
           success: true,
           queued: true,
           messageId,
           queuePosition: queueLength + 1,
           queueLength: queueLength + 1,
           message: 'Message queued for delivery',
-        });
+        };
+
+        logger.info('[Chats NS] Sending chat:send response:', response);
+        callback(response);
       } catch (error) {
-        logger.error('[Chats NS] Failed to queue chat message:', error.message);
-        callback({ success: false, error: error.message });
+        logger.error('[Chats NS] Failed to queue chat message:', error.message, error.stack);
+        if (callback) {
+          callback({ success: false, error: error.message });
+        }
       }
     });
 
     // Send single message (for quick sends)
-    socket.on('message:send', async ({ accountId, to, message }, callback) => {
+    socket.on('message:send', async (...args) => {
+      logger.info('[Chats NS] Received message:send, args:', args.length, 'types:', args.map(a => typeof a));
+
+      // The last argument should be the callback (if acknowledgement is requested)
+      const callback = typeof args[args.length - 1] === 'function' ? args[args.length - 1] : null;
+      const data = args[0] || {};
+
+      if (!callback) {
+        logger.warn('[Chats NS] No callback provided for message:send');
+        return;
+      }
+
+      const { accountId, to, message } = data;
+
       try {
         if (!accountId || !to || !message) {
+          logger.error('[Chats NS] Missing required fields:', { accountId, to, hasMessage: !!message });
           return callback({ success: false, error: 'Missing required fields' });
         }
+
+        logger.info(`[Chats NS] Sending message from ${accountId} to ${to}, length: ${message.length}`);
 
         let clientInfo = clients.get(accountId);
 
@@ -237,28 +312,49 @@ module.exports = function(io, dependencies) {
         const messageId = enqueueMessage(accountId, to, message);
         const queue = messageQueues.get(accountId) || [];
 
+        logger.info(`[Chats NS] Message queued: ${messageId}, queue length: ${queue.length}`);
+
         if (queue.length === 1) {
           setTimeout(() => processMessageQueue(accountId), 100);
         }
 
-        callback({
+        const response = {
           success: true,
           queued: true,
           messageId,
           queuePosition: queue.length,
           message: 'Message queued for delivery',
-        });
+        };
+
+        logger.info('[Chats NS] Sending response:', response);
+        callback(response);
       } catch (error) {
-        logger.error('[Chats NS] Failed to queue message:', error.message);
-        callback({ success: false, error: error.message });
+        logger.error('[Chats NS] Failed to queue message:', error.message, error.stack);
+        if (callback) {
+          callback({ success: false, error: error.message });
+        }
       }
     });
 
     // Get queue status
-    socket.on('queue:status', async ({ accountId }, callback) => {
+    socket.on('queue:status', async (...args) => {
+      logger.info('[Chats NS] Received queue:status, args:', args.length, 'types:', args.map(a => typeof a));
+
+      const callback = typeof args[args.length - 1] === 'function' ? args[args.length - 1] : null;
+      const data = args[0] || {};
+
+      if (!callback) {
+        logger.warn('[Chats NS] No callback provided for queue:status');
+        return;
+      }
+
+      const { accountId } = data;
+
       try {
         const queue = messageQueues.get(accountId) || [];
         const clientInfo = clients.get(accountId);
+
+        logger.info(`[Chats NS] Queue status for ${accountId}: ${queue.length} messages, client: ${clientInfo?.status || 'DISCONNECTED'}`);
 
         callback({
           success: true,
@@ -277,8 +373,10 @@ module.exports = function(io, dependencies) {
           },
         });
       } catch (error) {
-        logger.error('[Chats NS] Failed to get queue status:', error.message);
-        callback({ success: false, error: error.message });
+        logger.error('[Chats NS] Failed to get queue status:', error.message, error.stack);
+        if (callback) {
+          callback({ success: false, error: error.message });
+        }
       }
     });
 

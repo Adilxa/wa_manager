@@ -1183,14 +1183,22 @@ async function initializeClient(accountId) {
 
           // WebSocket emit for real-time QR delivery
           if (global.io) {
-            global.io.of('/qr')
-              .to(`account:${accountId}`)
-              .emit('qr:generated', {
-                accountId,
-                qrCode: qrDataUrl,
-                expiresIn: 45,
-                timestamp: new Date().toISOString()
-              });
+            const qrNamespace = global.io.of('/qr');
+            const roomName = `account:${accountId}`;
+            const connectedSockets = qrNamespace.adapter.rooms.get(roomName);
+
+            logger.info(`[QR] Emitting qr:generated to room ${roomName}, connected sockets: ${connectedSockets ? connectedSockets.size : 0}`);
+
+            qrNamespace.to(roomName).emit('qr:generated', {
+              accountId,
+              qrCode: qrDataUrl,
+              expiresIn: 45,
+              timestamp: new Date().toISOString()
+            });
+
+            logger.info(`[QR] QR code emitted successfully for ${accountId}`);
+          } else {
+            logger.warn(`[QR] global.io not available, cannot emit qr:generated for ${accountId}`);
           }
 
           logger.info(`QR ready for ${accountId}`);
