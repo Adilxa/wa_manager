@@ -12,6 +12,9 @@ interface Account {
   status: string;
   qrCode: string | null;
   clientStatus: string;
+  hasActiveClient: boolean;
+  useLimits: boolean;
+  createdAt: string;
 }
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
@@ -106,56 +109,41 @@ export default function QRPage() {
 
     if (!accountId) return;
 
-    // Если WebSocket включен - подписаться
-    if (socketManager.isEnabled()) {
-      const qrSocket = socketManager.getSocket('/qr');
-      const accountSocket = socketManager.getSocket('/accounts');
+    // Use WebSocket for real-time updates
+    const qrSocket = socketManager.getSocket('/qr');
+    const accountSocket = socketManager.getSocket('/accounts');
 
-      qrSocket.emit('join', accountId);
-      accountSocket.emit('join', accountId);
+    qrSocket.emit('join', accountId);
+    accountSocket.emit('join', accountId);
 
-      qrSocket.on('qr:generated', (data: any) => {
-        if (data.accountId === accountId) {
-          setAccount(prev => prev ? {
-            ...prev,
-            qrCode: data.qrCode,
-            clientStatus: 'QR_READY'
-          } : null);
-        }
-      });
+    qrSocket.on('qr:generated', (data: any) => {
+      if (data.accountId === accountId) {
+        setAccount(prev => prev ? {
+          ...prev,
+          qrCode: data.qrCode,
+          clientStatus: 'QR_READY'
+        } : null);
+      }
+    });
 
-      accountSocket.on('account:status', (data: any) => {
-        if (data.accountId === accountId) {
-          setAccount(prev => prev ? {
-            ...prev,
-            status: data.status,
-            clientStatus: data.status,
-            phoneNumber: data.phoneNumber
-          } : null);
-          accountStatusRef.current = data.status;
-        }
-      });
+    accountSocket.on('account:status', (data: any) => {
+      if (data.accountId === accountId) {
+        setAccount(prev => prev ? {
+          ...prev,
+          status: data.status,
+          clientStatus: data.status,
+          phoneNumber: data.phoneNumber
+        } : null);
+        accountStatusRef.current = data.status;
+      }
+    });
 
-      return () => {
-        qrSocket.emit('leave', accountId);
-        accountSocket.emit('leave', accountId);
-        qrSocket.off('qr:generated');
-        accountSocket.off('account:status');
-      };
-    } else {
-      // Fallback: adaptive polling
-      const getPollingInterval = () => {
-        const status = accountStatusRef.current;
-        if (status === 'CONNECTED') return 10000;
-        if (['QR_READY', 'CONNECTING', 'AUTHENTICATING'].includes(status)) return 2000;
-        return 5000;
-      };
-
-      const interval = setInterval(() => loadAccount(), getPollingInterval());
-      pollingIntervalRef.current = interval;
-
-      return () => { if (interval) clearInterval(interval); };
-    }
+    return () => {
+      qrSocket.emit('leave', accountId);
+      accountSocket.emit('leave', accountId);
+      qrSocket.off('qr:generated');
+      accountSocket.off('account:status');
+    };
   }, [accountId, account?.clientStatus]);
 
   useEffect(() => {

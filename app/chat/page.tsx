@@ -24,6 +24,11 @@ interface Account {
   name: string;
   phoneNumber: string | null;
   status: string;
+  qrCode?: string | null;
+  clientStatus: string;
+  hasActiveClient: boolean;
+  useLimits: boolean;
+  createdAt: string;
 }
 
 interface Chat {
