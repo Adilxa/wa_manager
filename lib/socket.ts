@@ -87,10 +87,31 @@ class SocketManager {
    * Emit an event and wait for callback
    */
   emit<T = any>(namespace: string, event: string, data?: any): Promise<{ success: boolean; data?: T; error?: string }> {
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       const socket = this.getSocket(namespace);
+
+      // Check if socket is connected
+      if (!socket.connected) {
+        console.warn(`[WS] Socket ${namespace} not connected, waiting...`);
+      }
+
+      // Set timeout for response
+      const timeout = setTimeout(() => {
+        console.error(`[WS] Timeout waiting for ${event} on ${namespace}`);
+        resolve({ success: false, error: 'Request timeout' });
+      }, 30000); // 30 second timeout
+
+      console.log(`[WS] Emitting ${event} on ${namespace}`, data);
+
       socket.emit(event, data, (response: any) => {
-        resolve(response || { success: false, error: 'No response' });
+        clearTimeout(timeout);
+        console.log(`[WS] Response for ${event}:`, response);
+
+        if (!response) {
+          resolve({ success: false, error: 'No response from server' });
+        } else {
+          resolve(response);
+        }
       });
     });
   }

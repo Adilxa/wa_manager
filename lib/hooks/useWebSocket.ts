@@ -31,24 +31,29 @@ export function useAccounts() {
   }, []);
 
   useEffect(() => {
+    console.log('[useAccounts] Initializing...');
     loadAccounts();
 
     // Subscribe to real-time updates
-    accountsSocket.onCreated((account) => {
+    const handleCreated = (account: any) => {
+      console.log('[useAccounts] Account created:', account);
       setAccounts((prev) => [...prev, account]);
-    });
+    };
 
-    accountsSocket.onUpdated((account) => {
+    const handleUpdated = (account: any) => {
+      console.log('[useAccounts] Account updated:', account);
       setAccounts((prev) =>
         prev.map((a) => (a.id === account.id ? { ...a, ...account } : a))
       );
-    });
+    };
 
-    accountsSocket.onDeleted(({ accountId }) => {
+    const handleDeleted = ({ accountId }: { accountId: string }) => {
+      console.log('[useAccounts] Account deleted:', accountId);
       setAccounts((prev) => prev.filter((a) => a.id !== accountId));
-    });
+    };
 
-    accountsSocket.onStatusUpdate((data) => {
+    const handleStatus = (data: any) => {
+      console.log('[useAccounts] Status update:', data);
       setAccounts((prev) =>
         prev.map((a) =>
           a.id === data.accountId
@@ -56,7 +61,18 @@ export function useAccounts() {
             : a
         )
       );
-    });
+    };
+
+    accountsSocket.onCreated(handleCreated);
+    accountsSocket.onUpdated(handleUpdated);
+    accountsSocket.onDeleted(handleDeleted);
+    accountsSocket.onStatusUpdate(handleStatus);
+
+    return () => {
+      console.log('[useAccounts] Cleaning up...');
+      // Note: Socket.IO doesn't provide easy cleanup of specific handlers
+      // They will be cleaned when socket disconnects
+    };
   }, [loadAccounts]);
 
   const createAccount = useCallback(async (name: string, useLimits = true) => {
