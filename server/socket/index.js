@@ -32,7 +32,13 @@ async function initSocketIO(httpServer, dependencies) {
   // Redis adapter for horizontal scaling
   const redisConfig = {
     host: process.env.REDIS_HOST || 'redis',
-    port: parseInt(process.env.REDIS_PORT || '6379')
+    port: parseInt(process.env.REDIS_PORT || '6379'),
+    retryStrategy(times) {
+      const delay = Math.min(times * 50, 2000);
+      return delay;
+    },
+    maxRetriesPerRequest: null,
+    enableReadyCheck: true,
   };
 
   // Add password only if provided
@@ -40,12 +46,53 @@ async function initSocketIO(httpServer, dependencies) {
     redisConfig.password = process.env.REDIS_PASSWORD;
   }
 
+  logger.info('[Socket.IO] Connecting to Redis...', { host: redisConfig.host, port: redisConfig.port });
+
   const pubClient = new Redis(redisConfig);
   const subClient = pubClient.duplicate();
 
+  // Log Redis errors (but don't reject on them after connection is ready)
+  pubClient.on('error', (err) => {
+    logger.error('[Socket.IO] Redis pub client error:', err.message);
+  });
+
+  subClient.on('error', (err) => {
+    logger.error('[Socket.IO] Redis sub client error:', err.message);
+  });
+
+  // Wait for Redis clients to be ready
+  await Promise.all([
+    new Promise((resolve, reject) => {
+      if (pubClient.status === 'ready') {
+        logger.info('[Socket.IO] Redis pub client already ready');
+        resolve();
+      } else {
+        const timeout = setTimeout(() => reject(new Error('Redis pub client connection timeout')), 10000);
+        pubClient.once('ready', () => {
+          clearTimeout(timeout);
+          logger.info('[Socket.IO] Redis pub client ready');
+          resolve();
+        });
+      }
+    }),
+    new Promise((resolve, reject) => {
+      if (subClient.status === 'ready') {
+        logger.info('[Socket.IO] Redis sub client already ready');
+        resolve();
+      } else {
+        const timeout = setTimeout(() => reject(new Error('Redis sub client connection timeout')), 10000);
+        subClient.once('ready', () => {
+          clearTimeout(timeout);
+          logger.info('[Socket.IO] Redis sub client ready');
+          resolve();
+        });
+      }
+    }),
+  ]);
+
   io.adapter(createAdapter(pubClient, subClient));
 
-  logger.info('Socket.IO initialized with Redis adapter');
+  logger.info('[Socket.IO] Redis adapter initialized successfully');
 
   // Prepare dependencies for namespaces
   const namespaceDeps = {
