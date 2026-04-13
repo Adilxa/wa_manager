@@ -332,14 +332,14 @@ export const chatsSocket = {
   /**
    * Send message to chat
    */
-  sendToChat(accountId: string, chatId: string, message: string): Promise<{ success: boolean; messageId?: string; error?: string }> {
+  sendToChat(accountId: string, chatId: string, message: string): Promise<{ success: boolean; messageId?: string; queued?: boolean; queuePosition?: number; error?: string }> {
     return socketManager.emit('/chats', 'chat:send', { accountId, chatId, message });
   },
 
   /**
    * Send single message
    */
-  send(accountId: string, to: string, message: string): Promise<{ success: boolean; messageId?: string; error?: string }> {
+  send(accountId: string, to: string, message: string): Promise<{ success: boolean; messageId?: string; queued?: boolean; queuePosition?: number; error?: string }> {
     return socketManager.emit('/chats', 'message:send', { accountId, to, message });
   },
 
