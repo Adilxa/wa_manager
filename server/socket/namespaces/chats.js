@@ -1,6 +1,21 @@
 /**
  * WebSocket Namespace: /chats
  * Handles all chat and messaging operations
+ *
+ * Events:
+ * - join(accountId) - Subscribe to account messages
+ * - leave(accountId) - Unsubscribe from account messages
+ * - chats:list({ accountId, page?, limit?, phone? }) - Get all chats
+ * - chat:messages({ accountId, chatId }) - Get messages for specific chat
+ * - chat:send({ accountId, chatId, message }) - Send message to chat
+ * - message:send({ accountId, to, message }) - Send single message
+ * - messages:history({ accountId, limit?, offset? }) - Get all messages for account
+ * - queue:status({ accountId }) - Get queue status
+ *
+ * Room Events (emitted to account:${accountId}):
+ * - chat:message:new - New incoming/outgoing message
+ * - chat:message:sent - Message successfully sent
+ * - chat:message:failed - Message failed to send
  */
 
 module.exports = function(io, dependencies) {
@@ -11,24 +26,55 @@ module.exports = function(io, dependencies) {
     return new Promise(resolve => setTimeout(resolve, ms));
   }
 
+  /**
+   * Normalize phone number - remove + and any non-digit characters
+   * @param {string} phone - Phone number
+   * @returns {string} - Normalized phone number (digits only)
+   */
+  function normalizePhone(phone) {
+    if (!phone) return '';
+    // Remove + at start and any non-digit characters
+    return phone.replace(/^\+/, '').replace(/\D/g, '');
+  }
+
   chatsNS.on('connection', (socket) => {
     logger.info(`[Chats NS] Connected: ${socket.id}`);
 
-    // Subscribe to chat updates for an account
+    // =============================================
+    // ROOM MANAGEMENT
+    // =============================================
+
+    /**
+     * Join account room to receive real-time message updates
+     * @event join
+     * @param {string} accountId - Account ID to subscribe to
+     */
     socket.on('join', (accountId) => {
       socket.join(`account:${accountId}`);
-      logger.debug(`[Chats NS] Socket ${socket.id} joined account:${accountId}`);
+      logger.info(`[Chats NS] Socket ${socket.id} joined room account:${accountId}`);
     });
 
+    /**
+     * Leave account room
+     * @event leave
+     * @param {string} accountId - Account ID to unsubscribe from
+     */
     socket.on('leave', (accountId) => {
       socket.leave(`account:${accountId}`);
-      logger.debug(`[Chats NS] Socket ${socket.id} left account:${accountId}`);
+      logger.info(`[Chats NS] Socket ${socket.id} left room account:${accountId}`);
     });
 
-    // Get all chats for an account
-    socket.on('chats:list', async (...args) => {
-      logger.info('[Chats NS] Received chats:list, args:', args.length, 'types:', args.map(a => typeof a));
+    // =============================================
+    // CHAT LIST & HISTORY
+    // =============================================
 
+    /**
+     * Get all chats (grouped by contact) for an account
+     * @event chats:list
+     * @param {Object} data - { accountId, page?, limit?, phone? }
+     * @returns {Object} - { success, data: Chat[], pagination }
+     */
+    socket.on('chats:list', async (...args) => {
       const callback = typeof args[args.length - 1] === 'function' ? args[args.length - 1] : null;
       const data = args[0] || {};
 
@@ -39,8 +85,12 @@ module.exports = function(io, dependencies) {
 
       const { accountId, page = 1, limit = 50, phone } = data;
 
+      if (!accountId) {
+        return callback({ success: false, error: 'accountId is required' });
+      }
+
       try {
-        logger.info(`[Chats NS] Fetching chats for account: ${accountId}, page: ${page}, limit: ${limit}`);
+        logger.info(`[Chats NS] chats:list for account: ${accountId}`);
         const pageNum = parseInt(page);
         const limitNum = Math.min(parseInt(limit), 100);
         const skip = (pageNum - 1) * limitNum;
@@ -48,10 +98,11 @@ module.exports = function(io, dependencies) {
         const where = { accountId };
 
         if (phone) {
+          const normalizedPhone = normalizePhone(phone);
           where.OR = [
-            { to: { contains: phone } },
-            { from: { contains: phone } },
-            { contactNumber: { contains: phone } },
+            { to: { contains: normalizedPhone } },
+            { from: { contains: normalizedPhone } },
+            { contactNumber: { contains: normalizedPhone } },
           ];
         }
 
@@ -61,6 +112,7 @@ module.exports = function(io, dependencies) {
           take: 5000,
         });
 
+        // Group messages by contact
         const chatsMap = new Map();
 
         messages.forEach(msg => {
@@ -72,19 +124,21 @@ module.exports = function(io, dependencies) {
               chatId: msg.chatId,
               contactNumber: msg.contactNumber || msg.to || msg.from,
               contactName: msg.contactName,
-              messages: [],
-              unreadCount: 0,
+              lastMessage: msg.message,
               lastMessageTime: msg.sentAt,
+              lastMessageDirection: msg.direction,
+              messageCount: 0,
+              unreadCount: 0,
             });
           }
 
           const chat = chatsMap.get(key);
-          if (chat.messages.length < 50) {
-            chat.messages.push(msg);
-          }
+          chat.messageCount++;
 
           if (new Date(msg.sentAt) > new Date(chat.lastMessageTime)) {
             chat.lastMessageTime = msg.sentAt;
+            chat.lastMessage = msg.message;
+            chat.lastMessageDirection = msg.direction;
           }
         });
 
@@ -95,9 +149,7 @@ module.exports = function(io, dependencies) {
         const paginatedChats = chatsArray.slice(skip, skip + limitNum);
         const totalPages = Math.ceil(total / limitNum);
 
-        logger.info(`[Chats NS] Found ${total} chats, returning ${paginatedChats.length} for page ${pageNum}`);
-
-        const response = {
+        callback({
           success: true,
           data: paginatedChats,
           pagination: {
@@ -108,21 +160,20 @@ module.exports = function(io, dependencies) {
             hasNextPage: pageNum < totalPages,
             hasPrevPage: pageNum > 1,
           },
-        };
-
-        callback(response);
+        });
       } catch (error) {
-        logger.error('[Chats NS] Failed to get chats:', error.message, error.stack);
-        if (callback) {
-          callback({ success: false, error: error.message });
-        }
+        logger.error('[Chats NS] chats:list error:', error.message);
+        callback({ success: false, error: error.message });
       }
     });
 
-    // Get messages for a specific chat
+    /**
+     * Get messages for a specific chat
+     * @event chat:messages
+     * @param {Object} data - { accountId, chatId, limit?, offset? }
+     * @returns {Object} - { success, data: Message[] }
+     */
     socket.on('chat:messages', async (...args) => {
-      logger.info('[Chats NS] Received chat:messages, args:', args.length, 'types:', args.map(a => typeof a));
-
       const callback = typeof args[args.length - 1] === 'function' ? args[args.length - 1] : null;
       const data = args[0] || {};
 
@@ -131,34 +182,145 @@ module.exports = function(io, dependencies) {
         return;
       }
 
-      const { accountId, chatId } = data;
+      const { accountId, chatId, limit = 100, offset = 0 } = data;
+
+      if (!accountId || !chatId) {
+        return callback({ success: false, error: 'accountId and chatId are required' });
+      }
 
       try {
-        logger.info(`[Chats NS] Fetching messages for chat: ${chatId}, account: ${accountId}`);
+        logger.info(`[Chats NS] chat:messages for ${chatId}`);
 
         const decodedChatId = decodeURIComponent(chatId);
+        const contactNumber = normalizePhone(decodedChatId.split('@')[0]);
 
+        // Find messages by chatId or contactNumber
         const messages = await prisma.message.findMany({
-          where: { accountId, chatId: decodedChatId },
+          where: {
+            accountId,
+            OR: [
+              { chatId: decodedChatId },
+              { contactNumber },
+              { to: contactNumber },
+              { from: contactNumber },
+            ],
+          },
           orderBy: { sentAt: 'asc' },
-          take: 500,
+          skip: parseInt(offset),
+          take: Math.min(parseInt(limit), 500),
         });
 
-        logger.info(`[Chats NS] Found ${messages.length} messages for chat ${chatId}`);
-
-        callback({ success: true, data: messages });
+        callback({
+          success: true,
+          data: messages.map(msg => ({
+            id: msg.id,
+            chatId: msg.chatId,
+            direction: msg.direction,
+            message: msg.message,
+            status: msg.status,
+            contactNumber: msg.contactNumber,
+            contactName: msg.contactName,
+            sentAt: msg.sentAt,
+            createdAt: msg.createdAt,
+          })),
+          pagination: {
+            count: messages.length,
+            offset: parseInt(offset),
+            limit: parseInt(limit),
+          },
+        });
       } catch (error) {
-        logger.error('[Chats NS] Failed to get chat messages:', error.message, error.stack);
-        if (callback) {
-          callback({ success: false, error: error.message });
-        }
+        logger.error('[Chats NS] chat:messages error:', error.message);
+        callback({ success: false, error: error.message });
       }
     });
 
-    // Send message to a chat
-    socket.on('chat:send', async (...args) => {
-      logger.info('[Chats NS] Received chat:send, args:', args.length, 'types:', args.map(a => typeof a));
+    /**
+     * Get all messages history for an account
+     * @event messages:history
+     * @param {Object} data - { accountId, limit?, offset?, direction?, startDate?, endDate? }
+     * @returns {Object} - { success, data: Message[], pagination }
+     */
+    socket.on('messages:history', async (...args) => {
+      const callback = typeof args[args.length - 1] === 'function' ? args[args.length - 1] : null;
+      const data = args[0] || {};
 
+      if (!callback) {
+        logger.warn('[Chats NS] No callback provided for messages:history');
+        return;
+      }
+
+      const { accountId, limit = 100, offset = 0, direction, startDate, endDate } = data;
+
+      if (!accountId) {
+        return callback({ success: false, error: 'accountId is required' });
+      }
+
+      try {
+        logger.info(`[Chats NS] messages:history for account: ${accountId}`);
+
+        const where = { accountId };
+
+        if (direction) {
+          where.direction = direction; // 'INCOMING' or 'OUTGOING'
+        }
+
+        if (startDate || endDate) {
+          where.sentAt = {};
+          if (startDate) where.sentAt.gte = new Date(startDate);
+          if (endDate) where.sentAt.lte = new Date(endDate);
+        }
+
+        const [messages, total] = await Promise.all([
+          prisma.message.findMany({
+            where,
+            orderBy: { sentAt: 'desc' },
+            skip: parseInt(offset),
+            take: Math.min(parseInt(limit), 500),
+          }),
+          prisma.message.count({ where }),
+        ]);
+
+        callback({
+          success: true,
+          data: messages.map(msg => ({
+            id: msg.id,
+            chatId: msg.chatId,
+            direction: msg.direction,
+            message: msg.message,
+            status: msg.status,
+            contactNumber: msg.contactNumber,
+            contactName: msg.contactName,
+            to: msg.to,
+            from: msg.from,
+            sentAt: msg.sentAt,
+            createdAt: msg.createdAt,
+          })),
+          pagination: {
+            total,
+            count: messages.length,
+            offset: parseInt(offset),
+            limit: parseInt(limit),
+            hasMore: parseInt(offset) + messages.length < total,
+          },
+        });
+      } catch (error) {
+        logger.error('[Chats NS] messages:history error:', error.message);
+        callback({ success: false, error: error.message });
+      }
+    });
+
+    // =============================================
+    // SEND MESSAGES
+    // =============================================
+
+    /**
+     * Send message to a specific chat (by chatId)
+     * @event chat:send
+     * @param {Object} data - { accountId, chatId, message }
+     * @returns {Object} - { success, messageId, queued, queuePosition }
+     */
+    socket.on('chat:send', async (...args) => {
       const callback = typeof args[args.length - 1] === 'function' ? args[args.length - 1] : null;
       const data = args[0] || {};
 
@@ -169,90 +331,76 @@ module.exports = function(io, dependencies) {
 
       const { accountId, chatId, message } = data;
 
+      if (!accountId || !chatId || !message) {
+        return callback({ success: false, error: 'accountId, chatId and message are required' });
+      }
+
       try {
-        logger.info(`[Chats NS] Sending to chat: ${chatId}, account: ${accountId}`);
+        logger.info(`[Chats NS] chat:send to ${chatId}`);
 
         const decodedChatId = decodeURIComponent(chatId);
 
-        if (!message) {
-          logger.error('[Chats NS] Message is required');
-          return callback({ success: false, error: 'Message is required' });
-        }
-
+        // Check client connection
         let clientInfo = clients.get(accountId);
-
         if (!clientInfo || clientInfo.status !== 'CONNECTED') {
-          try {
-            const account = await prisma.whatsAppAccount.findUnique({
-              where: { id: accountId },
-            });
+          const account = await prisma.whatsAppAccount.findUnique({ where: { id: accountId } });
+          if (!account) {
+            return callback({ success: false, error: 'Account not found' });
+          }
 
-            if (!account) {
-              return callback({ success: false, error: 'Account not found' });
-            }
+          if (!clientInfo) {
+            await initializeClient(accountId);
+          } else if (clientInfo.status === 'DISCONNECTED') {
+            await cleanupClient(accountId);
+            await initializeClient(accountId);
+          }
 
-            if (!clientInfo) {
-              await initializeClient(accountId);
-            } else if (clientInfo.status === 'DISCONNECTED') {
-              await cleanupClient(accountId);
-              await initializeClient(accountId);
-            }
+          await sleep(2000);
+          clientInfo = clients.get(accountId);
 
-            await sleep(2000);
-
-            clientInfo = clients.get(accountId);
-            if (!clientInfo || clientInfo.status !== 'CONNECTED') {
-              return callback({
-                success: false,
-                error: 'Account is connecting. Try again.',
-                status: clientInfo?.status || 'DISCONNECTED',
-              });
-            }
-          } catch (connectError) {
+          if (!clientInfo || clientInfo.status !== 'CONNECTED') {
             return callback({
               success: false,
-              error: 'Failed to connect account',
-              details: connectError.message,
+              error: 'Account is connecting. Try again.',
+              status: clientInfo?.status || 'DISCONNECTED',
             });
           }
         }
 
-        const contactNumber = decodedChatId.split('@')[0];
+        // Normalize contact number (remove + and @suffix)
+        const contactNumber = normalizePhone(decodedChatId.split('@')[0]);
         const queue = messageQueues.get(accountId) || [];
         const queueLength = queue.length;
 
+        // Enqueue message with humanBehavior
         const messageId = enqueueMessage(accountId, contactNumber, message);
 
-        logger.info(`[Chats NS] Chat message queued: ${messageId}, contact: ${contactNumber}, queue length: ${queueLength + 1}`);
+        logger.info(`[Chats NS] Message queued: ${messageId}, to: ${contactNumber}, position: ${queueLength + 1}`);
 
         if (queueLength === 0) {
           setTimeout(() => processMessageQueue(accountId), 100);
         }
 
-        const response = {
+        callback({
           success: true,
           queued: true,
           messageId,
           queuePosition: queueLength + 1,
-          queueLength: queueLength + 1,
           message: 'Message queued for delivery',
-        };
-
-        logger.info('[Chats NS] Sending chat:send response:', response);
-        callback(response);
+        });
       } catch (error) {
-        logger.error('[Chats NS] Failed to queue chat message:', error.message, error.stack);
-        if (callback) {
-          callback({ success: false, error: error.message });
-        }
+        logger.error('[Chats NS] chat:send error:', error.message);
+        callback({ success: false, error: error.message });
       }
     });
 
-    // Send single message (for quick sends)
+    /**
+     * Send single message to a phone number
+     * @event message:send
+     * @param {Object} data - { accountId, to, message }
+     * @returns {Object} - { success, messageId, queued, queuePosition }
+     */
     socket.on('message:send', async (...args) => {
-      logger.info('[Chats NS] Received message:send, args:', args.length, 'types:', args.map(a => typeof a));
-
-      // The last argument should be the callback (if acknowledgement is requested)
       const callback = typeof args[args.length - 1] === 'function' ? args[args.length - 1] : null;
       const data = args[0] || {};
 
@@ -263,159 +411,78 @@ module.exports = function(io, dependencies) {
 
       const { accountId, to, message } = data;
 
+      if (!accountId || !to || !message) {
+        return callback({ success: false, error: 'accountId, to and message are required' });
+      }
+
       try {
-        if (!accountId || !to || !message) {
-          logger.error('[Chats NS] Missing required fields:', { accountId, to, hasMessage: !!message });
-          return callback({ success: false, error: 'Missing required fields' });
-        }
+        // Normalize phone number (remove + at start)
+        const normalizedTo = normalizePhone(to);
+        logger.info(`[Chats NS] message:send from ${accountId} to ${normalizedTo}`);
 
-        logger.info(`[Chats NS] Sending message from ${accountId} to ${to}, length: ${message.length}`);
-
+        // Check client connection
         let clientInfo = clients.get(accountId);
-
         if (!clientInfo || clientInfo.status !== 'CONNECTED') {
-          try {
-            const account = await prisma.whatsAppAccount.findUnique({
-              where: { id: accountId },
-            });
+          const account = await prisma.whatsAppAccount.findUnique({ where: { id: accountId } });
+          if (!account) {
+            return callback({ success: false, error: 'Account not found' });
+          }
 
-            if (!account) {
-              return callback({ success: false, error: 'Account not found' });
-            }
+          if (!clientInfo) {
+            await initializeClient(accountId);
+          } else if (clientInfo.status === 'DISCONNECTED') {
+            await cleanupClient(accountId);
+            await initializeClient(accountId);
+          }
 
-            if (!clientInfo) {
-              await initializeClient(accountId);
-            } else if (clientInfo.status === 'DISCONNECTED') {
-              await cleanupClient(accountId);
-              await initializeClient(accountId);
-            }
+          await sleep(2000);
+          clientInfo = clients.get(accountId);
 
-            await sleep(2000);
-
-            clientInfo = clients.get(accountId);
-            if (!clientInfo || clientInfo.status !== 'CONNECTED') {
-              return callback({
-                success: false,
-                error: 'Account is connecting. Try again in a few seconds.',
-                status: clientInfo?.status || 'DISCONNECTED',
-              });
-            }
-          } catch (connectError) {
+          if (!clientInfo || clientInfo.status !== 'CONNECTED') {
             return callback({
               success: false,
-              error: 'Failed to connect account',
-              details: connectError.message,
+              error: 'Account is connecting. Try again.',
+              status: clientInfo?.status || 'DISCONNECTED',
             });
           }
         }
 
-        // Check if account has useLimits disabled - send DIRECTLY without queue
-        const account = await prisma.whatsAppAccount.findUnique({
-          where: { id: accountId },
-          select: { useLimits: true }
-        });
-
-        // Format JID
-        let jid = to;
-        if (!to.includes('@')) {
-          jid = `${to}@s.whatsapp.net`;
-        }
-
-        // DIRECT SEND without queue when useLimits is false
-        if (account && !account.useLimits) {
-          logger.info(`[Chats NS] 🚀 DIRECT SEND (no limits) to ${jid}`);
-
-          try {
-            // Log sock state before sending
-            logger.info(`[Chats NS] 📊 Sock state:`, JSON.stringify({
-              hasSock: !!clientInfo.sock,
-              hasSendMessage: typeof clientInfo.sock?.sendMessage === 'function',
-              hasUser: !!clientInfo.sock?.user,
-              userId: clientInfo.sock?.user?.id,
-              status: clientInfo.status
-            }));
-
-            const sendStart = Date.now();
-            logger.info(`[Chats NS] ⏱️ Starting sock.sendMessage at ${new Date().toISOString()}`);
-
-            // Direct send with timeout
-            const sentMessage = await Promise.race([
-              clientInfo.sock.sendMessage(jid, { text: message }),
-              new Promise((_, reject) => {
-                setTimeout(() => {
-                  logger.error(`[Chats NS] ⏱️ TIMEOUT after 8s`);
-                  reject(new Error('Send timeout after 8000ms'));
-                }, 8000);
-              })
-            ]);
-
-            const elapsed = Date.now() - sendStart;
-            logger.info(`[Chats NS] ✅ Message sent in ${elapsed}ms, id: ${sentMessage?.key?.id}`);
-
-            // Save to database
-            const contactNumber = jid.split('@')[0].split(':')[0];
-            await prisma.message.create({
-              data: {
-                accountId,
-                chatId: jid,
-                direction: 'OUTGOING',
-                message: message,
-                to: contactNumber,
-                status: 'SENT',
-                contactNumber,
-              },
-            });
-
-            return callback({
-              success: true,
-              messageId: sentMessage?.key?.id,
-              message: 'Message sent successfully',
-            });
-
-          } catch (sendError) {
-            logger.error(`[Chats NS] ❌ Direct send failed:`, sendError.message);
-            logger.error(`[Chats NS] Error stack:`, sendError.stack);
-
-            // Return error to client
-            return callback({
-              success: false,
-              error: sendError.message,
-            });
-          }
-        }
-
-        // With limits - use queue
-        const messageId = enqueueMessage(accountId, to, message);
         const queue = messageQueues.get(accountId) || [];
+        const queueLength = queue.length;
 
-        logger.info(`[Chats NS] Message queued: ${messageId}, queue length: ${queue.length}`);
+        // Enqueue message with humanBehavior (always uses queue)
+        const messageId = enqueueMessage(accountId, normalizedTo, message);
 
-        if (queue.length === 1) {
+        logger.info(`[Chats NS] Message queued: ${messageId}, to: ${normalizedTo}, position: ${queueLength + 1}`);
+
+        if (queueLength === 0) {
           setTimeout(() => processMessageQueue(accountId), 100);
         }
 
-        const response = {
+        callback({
           success: true,
           queued: true,
           messageId,
-          queuePosition: queue.length,
+          queuePosition: queueLength + 1,
           message: 'Message queued for delivery',
-        };
-
-        logger.info('[Chats NS] Sending response:', response);
-        callback(response);
+        });
       } catch (error) {
-        logger.error('[Chats NS] Failed to send message:', error.message, error.stack);
-        if (callback) {
-          callback({ success: false, error: error.message });
-        }
+        logger.error('[Chats NS] message:send error:', error.message);
+        callback({ success: false, error: error.message });
       }
     });
 
-    // Get queue status
-    socket.on('queue:status', async (...args) => {
-      logger.info('[Chats NS] Received queue:status, args:', args.length, 'types:', args.map(a => typeof a));
+    // =============================================
+    // QUEUE STATUS
+    // =============================================
 
+    /**
+     * Get message queue status for an account
+     * @event queue:status
+     * @param {Object} data - { accountId }
+     * @returns {Object} - { success, data: QueueStatus }
+     */
+    socket.on('queue:status', async (...args) => {
       const callback = typeof args[args.length - 1] === 'function' ? args[args.length - 1] : null;
       const data = args[0] || {};
 
@@ -426,35 +493,38 @@ module.exports = function(io, dependencies) {
 
       const { accountId } = data;
 
+      if (!accountId) {
+        return callback({ success: false, error: 'accountId is required' });
+      }
+
       try {
         const queue = messageQueues.get(accountId) || [];
         const clientInfo = clients.get(accountId);
-
-        logger.info(`[Chats NS] Queue status for ${accountId}: ${queue.length} messages, client: ${clientInfo?.status || 'DISCONNECTED'}`);
 
         callback({
           success: true,
           data: {
             accountId,
             queueLength: queue.length,
+            clientStatus: clientInfo?.status || 'DISCONNECTED',
             messages: queue.slice(0, 20).map((msg, index) => ({
               position: index + 1,
               to: msg.to,
-              message: msg.message.substring(0, 50) + (msg.message.length > 50 ? '...' : ''),
+              messagePreview: msg.message.substring(0, 50) + (msg.message.length > 50 ? '...' : ''),
               retries: msg.retries,
+              createdAt: msg.createdAt,
             })),
-            status: {
-              clientStatus: clientInfo?.status || 'DISCONNECTED',
-            },
           },
         });
       } catch (error) {
-        logger.error('[Chats NS] Failed to get queue status:', error.message, error.stack);
-        if (callback) {
-          callback({ success: false, error: error.message });
-        }
+        logger.error('[Chats NS] queue:status error:', error.message);
+        callback({ success: false, error: error.message });
       }
     });
+
+    // =============================================
+    // CONNECTION EVENTS
+    // =============================================
 
     socket.on('disconnect', () => {
       logger.info(`[Chats NS] Disconnected: ${socket.id}`);
