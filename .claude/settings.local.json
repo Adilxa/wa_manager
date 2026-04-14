@@ -22,7 +22,9 @@
       "Bash(docker-compose ps:*)",
       "Bash(docker-compose:*)",
       "Bash(jq:*)",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "Bash(npm view:*)",
+      "Bash(docker exec:*)"
     ],
     "deny": [],
     "ask": []
