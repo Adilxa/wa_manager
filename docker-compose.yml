@@ -44,8 +44,9 @@ services:
       redis:
         condition: service_healthy
     ports:
-      - "3000:3000"
-      - "5001:5001"
+      # Bind only to localhost. Public traffic must go through Nginx on 80/443.
+      - "127.0.0.1:3000:3000"
+      - "127.0.0.1:5001:5001"
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-wa_manager}?schema=public
       DIRECT_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-wa_manager}?schema=public
