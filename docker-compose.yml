@@ -50,18 +50,21 @@ services:
       - "127.0.0.1:3000:3000"
       - "127.0.0.1:5001:5001"
     environment:
+      # Database connection - override from env_file if needed
       DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-wa_manager}?schema=public
       DIRECT_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-wa_manager}?schema=public
+      # Redis connection
       REDIS_HOST: redis
       REDIS_PORT: 6379
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      # Next.js URLs
       NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-http://localhost:3000}
       NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:5001}
+      # API configuration
       API_PORT: 5001
       API_SECRET_KEY: ${API_SECRET_KEY}
       NODE_ENV: production
-      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
-      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+      # Telegram credentials are loaded from .env.production via env_file
     volumes:
       - baileys_auth:/app/.baileys_auth
       - wa_logs:/app/logs
