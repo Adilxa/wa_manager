@@ -7,6 +7,7 @@ const path = require("path");
 const pino = require("pino");
 const { contractQueue, messageQueue } = require("./queue");
 const { initializeWorkers } = require("./workers");
+const TelegramNotifier = require("./telegram-bot");
 
 const {
   default: makeWASocket,
@@ -43,6 +44,9 @@ const logger = pino({
     },
   },
 });
+
+// Initialize Telegram Bot for notifications
+const telegramNotifier = new TelegramNotifier(logger);
 
 // ==================== CONFIGURATION ====================
 
@@ -114,6 +118,9 @@ const messageCounters = new Map();
 
 // Message queues for each account (legacy in-memory queue)
 const messageQueues = new Map();
+
+// Rate limit notification tracker (to avoid spam)
+const rateLimitNotifications = new Map();
 
 // Graceful shutdown flag
 let isShuttingDown = false;
@@ -641,6 +648,29 @@ async function processMessageQueue(accountId) {
     logger.warn(
       `⏳ Rate limit reached for ${accountId}. Waiting ${rateCheck.resetIn}s (${queue.length} messages in queue)...`
     );
+
+    // Send Telegram notification for rate limit (once per hour to avoid spam)
+    const lastNotify = rateLimitNotifications.get(accountId) || 0;
+    const now = Date.now();
+    if (now - lastNotify > 3600000) {
+      // 1 hour
+      try {
+        const account = await prisma.whatsAppAccount.findUnique({
+          where: { id: accountId },
+        });
+        if (account) {
+          telegramNotifier.notifyRateLimitReached(
+            accountId,
+            account.name,
+            rateCheck.resetIn
+          );
+          rateLimitNotifications.set(accountId, now);
+        }
+      } catch (err) {
+        logger.error("Failed to send rate limit notification:", err);
+      }
+    }
+
     // Wait for rate limit reset, then continue
     setTimeout(() => {
       logger.info(`🔄 Rate limit reset for ${accountId}, resuming queue...`);
@@ -655,6 +685,22 @@ async function processMessageQueue(accountId) {
     logger.error(
       `🚫 Daily limit reached for ${accountId}: ${dailyCheck.reason} (${queue.length} messages in queue)`
     );
+
+    // Send Telegram notification for daily limit
+    try {
+      const account = await prisma.whatsAppAccount.findUnique({
+        where: { id: accountId },
+      });
+      if (account) {
+        const limit = dailyCheck.isNewAccount
+          ? CONFIG.DAILY_MESSAGE_LIMIT_NEW_ACCOUNT
+          : CONFIG.DAILY_MESSAGE_LIMIT_OLD_ACCOUNT;
+        telegramNotifier.notifyDailyLimitReached(accountId, account.name, limit);
+      }
+    } catch (err) {
+      logger.error("Failed to send daily limit notification:", err);
+    }
+
     // Check again in 1 hour
     setTimeout(() => {
       logger.info(`🔄 Checking daily limit for ${accountId} again...`);
@@ -943,6 +989,24 @@ async function initializeClient(accountId) {
           await updateAccountStatus(accountId, "DISCONNECTED");
           reconnectAttempts.delete(accountId);
 
+          // Get account name for notification
+          const account = await prisma.whatsAppAccount.findUnique({
+            where: { id: accountId },
+          });
+
+          // Send Telegram notification
+          if (account) {
+            const reason =
+              statusCode === DisconnectReason.loggedOut
+                ? "User logged out"
+                : "Connection closed";
+            telegramNotifier.notifyAccountDisconnected(
+              accountId,
+              account.name,
+              reason
+            );
+          }
+
           // Clean up auth if logged out
           if (statusCode === DisconnectReason.loggedOut) {
             logger.info(`User logged out, cleaning auth for ${accountId}`);
@@ -976,6 +1040,20 @@ async function initializeClient(accountId) {
           phoneNumber,
           qrCode: null,
         });
+
+        // Get account name for notification
+        const account = await prisma.whatsAppAccount.findUnique({
+          where: { id: accountId },
+        });
+
+        // Send Telegram notification
+        if (account) {
+          telegramNotifier.notifyAccountConnected(
+            accountId,
+            account.name,
+            phoneNumber
+          );
+        }
 
         // Process any queued messages
         processMessageQueue(accountId).catch(err => {
@@ -1090,6 +1168,23 @@ async function initializeClient(accountId) {
     }
     await updateAccountStatus(accountId, "FAILED");
     await cleanupClient(accountId);
+
+    // Get account name for notification
+    try {
+      const account = await prisma.whatsAppAccount.findUnique({
+        where: { id: accountId },
+      });
+      if (account) {
+        telegramNotifier.notifyAccountFailed(
+          accountId,
+          account.name,
+          errorMsg
+        );
+      }
+    } catch (notifyError) {
+      logger.error("Failed to send failure notification:", notifyError);
+    }
+
     throw error;
   }
 }
@@ -2291,6 +2386,9 @@ async function restoreConnectedClients() {
 async function gracefulShutdown(signal) {
   logger.info(`Received ${signal}, starting graceful shutdown...`);
   isShuttingDown = true;
+
+  // Send Telegram notification
+  telegramNotifier.notifyShutdown(`Server received ${signal}`);
 
   // Stop monitoring
   stopHeartbeat();
