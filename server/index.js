@@ -76,6 +76,7 @@ const CONFIG = {
   MEMORY_CHECK_INTERVAL: 60000, // Check every minute
   MEMORY_WARNING_THRESHOLD: 0.75, // Warn at 75%
   MEMORY_CRITICAL_THRESHOLD: 0.85, // Critical at 85%
+  MEMORY_ALERT_COOLDOWN: 300000, // Send memory alerts at most once per 5 minutes
 
   // Message queue
   MESSAGE_RETRY_COUNT: 3,
@@ -130,6 +131,9 @@ let heartbeatInterval = null;
 
 // Memory monitor interval reference
 let memoryMonitorInterval = null;
+
+// Memory alert throttling state
+let lastMemoryAlert = null;
 
 // Auth sessions directory
 const SESSIONS_DIR = path.join(process.cwd(), ".baileys_auth");
@@ -342,6 +346,26 @@ async function reconnectWithBackoff(accountId) {
     );
     await updateAccountStatus(accountId, "FAILED");
     reconnectAttempts.delete(accountId);
+
+    try {
+      const account = await prisma.whatsAppAccount.findUnique({
+        where: { id: accountId },
+      });
+
+      if (account) {
+        await telegramNotifier.notifyAccountFailed(
+          accountId,
+          account.name,
+          `Max reconnection attempts (${CONFIG.RECONNECT_MAX_RETRIES}) reached`
+        );
+      }
+    } catch (error) {
+      logger.error(
+        { err: error, accountId },
+        "Failed to send max reconnection Telegram notification"
+      );
+    }
+
     return;
   }
 
@@ -414,6 +438,25 @@ function startHeartbeat() {
           clientInfo.status = "DISCONNECTED";
           await updateAccountStatus(accountId, "DISCONNECTED");
 
+          try {
+            const account = await prisma.whatsAppAccount.findUnique({
+              where: { id: accountId },
+            });
+
+            if (account) {
+              await telegramNotifier.notifyHeartbeatFailed(
+                accountId,
+                account.name,
+                error.message
+              );
+            }
+          } catch (notifyError) {
+            logger.error(
+              { err: notifyError, accountId },
+              "Failed to send heartbeat Telegram notification"
+            );
+          }
+
           // Clean up and reconnect
           await cleanupClient(accountId);
           await reconnectWithBackoff(accountId);
@@ -449,11 +492,13 @@ function startMemoryMonitor() {
   memoryMonitorInterval = setInterval(async () => {
     const used = process.memoryUsage();
     const heapPercent = used.heapUsed / used.heapTotal;
+    const stats = buildSystemStats(used);
 
     if (heapPercent > CONFIG.MEMORY_CRITICAL_THRESHOLD) {
       logger.error(
         `CRITICAL: Memory usage at ${Math.round(heapPercent * 100)}%`
       );
+      await sendMemoryAlert("critical", stats);
 
       // Force garbage collection if available
       if (global.gc) {
@@ -494,6 +539,9 @@ function startMemoryMonitor() {
       }
     } else if (heapPercent > CONFIG.MEMORY_WARNING_THRESHOLD) {
       logger.warn(`WARNING: Memory usage at ${Math.round(heapPercent * 100)}%`);
+      await sendMemoryAlert("warning", stats);
+    } else {
+      lastMemoryAlert = null;
     }
   }, CONFIG.MEMORY_CHECK_INTERVAL);
 
@@ -2331,6 +2379,35 @@ function formatUptime(seconds) {
   return parts.join(" ");
 }
 
+function buildSystemStats(used = process.memoryUsage()) {
+  return {
+    activeClients: clients.size,
+    connectingClients: connectingAccounts.size,
+    memoryUsedMB: Math.round(used.heapUsed / 1024 / 1024),
+    memoryTotalMB: Math.round(used.heapTotal / 1024 / 1024),
+    memoryPercent: Math.round((used.heapUsed / used.heapTotal) * 100),
+    rssMB: Math.round(used.rss / 1024 / 1024),
+    uptimeFormatted: formatUptime(process.uptime()),
+    uptimeMinutes: Math.round(process.uptime() / 60),
+    reconnectAttempts: reconnectAttempts.size,
+  };
+}
+
+async function sendMemoryAlert(level, stats) {
+  const now = Date.now();
+
+  if (
+    lastMemoryAlert &&
+    lastMemoryAlert.level === level &&
+    now - lastMemoryAlert.sentAt < CONFIG.MEMORY_ALERT_COOLDOWN
+  ) {
+    return;
+  }
+
+  lastMemoryAlert = { level, sentAt: now };
+  await telegramNotifier.notifyMemoryAlert(level, stats);
+}
+
 // ==================== SERVER LIFECYCLE ====================
 
 // Restore connected clients on server start
@@ -2447,20 +2524,9 @@ process.on("unhandledRejection", (reason, promise) => {
 
 // Monitor resources
 setInterval(() => {
-  const used = process.memoryUsage();
-  logger.info(
-    {
-      activeClients: clients.size,
-      connectingClients: connectingAccounts.size,
-      memoryUsedMB: Math.round(used.heapUsed / 1024 / 1024),
-      memoryTotalMB: Math.round(used.heapTotal / 1024 / 1024),
-      memoryPercent: Math.round((used.heapUsed / used.heapTotal) * 100),
-      rssMB: Math.round(used.rss / 1024 / 1024),
-      uptimeMinutes: Math.round(process.uptime() / 60),
-      reconnectAttempts: reconnectAttempts.size,
-    },
-    "Resource Monitor"
-  );
+  const stats = buildSystemStats();
+  logger.info(stats, "Resource Monitor");
+  telegramNotifier.notifySystemStatus(stats);
 }, CONFIG.RESOURCE_MONITOR_INTERVAL);
 
 // ==================== SERVER START ====================
