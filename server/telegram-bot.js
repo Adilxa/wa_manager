@@ -15,7 +15,8 @@ class TelegramNotifier {
 
     if (!token || !this.chatId) {
       this.logger.warn(
-        "Telegram bot credentials not found. Notifications disabled."
+        "Telegram bot credentials not found. Notifications disabled.",
+        { token: token ? "present" : "missing", chatId: this.chatId || "missing" }
       );
       return;
     }
@@ -23,14 +24,19 @@ class TelegramNotifier {
     try {
       this.bot = new TelegramBot(token, { polling: false });
       this.enabled = true;
-      this.logger.info("✅ Telegram bot initialized successfully");
+      this.logger.info("✅ Telegram bot initialized successfully", {
+        chatId: this.chatId,
+        tokenLength: token.length,
+      });
 
-      // Send startup notification
-      this.sendNotification(
-        "🚀 *WhatsApp Manager Started*\n\n" +
-        `Server is now running\n` +
-        `Time: ${new Date().toLocaleString()}`
-      );
+      // Send startup notification with a small delay to ensure bot is ready
+      setTimeout(() => {
+        this.sendNotification(
+          "🚀 *WhatsApp Manager Started*\n\n" +
+          `Server is now running\n` +
+          `Time: ${new Date().toLocaleString()}`
+        );
+      }, 1000);
     } catch (error) {
       this.logger.error("Failed to initialize Telegram bot:", error);
       this.enabled = false;
@@ -49,7 +55,12 @@ class TelegramNotifier {
       });
       this.logger.debug("Telegram notification sent");
     } catch (error) {
-      this.logger.error("Failed to send Telegram notification:", error.message);
+      this.logger.error("Failed to send Telegram notification:", {
+        message: error.message,
+        code: error.code,
+        response: error.response?.body,
+        chatId: this.chatId,
+      });
     }
   }
 
