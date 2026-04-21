@@ -43,6 +43,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    env_file:
+      - .env.production
     ports:
       # Bind only to localhost. Public traffic must go through Nginx on 80/443.
       - "127.0.0.1:3000:3000"
@@ -58,6 +60,8 @@ services:
       API_PORT: 5001
       API_SECRET_KEY: ${API_SECRET_KEY}
       NODE_ENV: production
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
     volumes:
       - baileys_auth:/app/.baileys_auth
       - wa_logs:/app/logs
@@ -72,10 +76,10 @@ services:
       resources:
         limits:
           cpus: '1.0'          # Уменьшили с 2.0 до 1.0
-          memory: 512M         # Уменьшили с 2G до 512M
+          memory: 1G           # Увеличили с 512M до 1G для стабильности
         reservations:
           cpus: '0.5'
-          memory: 256M
+          memory: 512M         # Увеличили с 256M до 512M
     # Дополнительная безопасность
     security_opt:
       - no-new-privileges:true
