@@ -35,6 +35,7 @@ ENV NEXT_PUBLIC_APP_URL=$NEXT_PUBLIC_APP_URL \
 # Generate Prisma client and build Next.js
 RUN npx prisma generate
 RUN npm run build
+RUN npm prune --omit=dev && npm cache clean --force
 
 # ==========================================
 # Production stage
@@ -50,15 +51,12 @@ WORKDIR /app
 # Install git (required for Baileys in production)
 RUN apk add --no-cache git curl
 
-# Copy package files
+# Copy package files and pruned production dependencies from builder
 COPY package*.json ./
-
-# Install production dependencies only
-RUN npm ci --omit=dev && npm cache clean --force
+COPY --from=builder /app/node_modules ./node_modules
 
 # Copy built files from builder stage
 COPY --from=builder /app/.next ./.next
-COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
 COPY --from=builder /app/public ./public
 
 # Copy application files
