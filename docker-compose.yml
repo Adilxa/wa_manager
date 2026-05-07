@@ -155,6 +155,8 @@ services:
       NEXTJS_NODE_MAX_OLD_SPACE_SIZE: ${NEXTJS_NODE_MAX_OLD_SPACE_SIZE:-512}
       RESTORE_CONNECTED_CLIENTS: ${RESTORE_CONNECTED_CLIENTS:-false}
       RESTORE_CONNECTED_CLIENTS_LIMIT: ${RESTORE_CONNECTED_CLIENTS_LIMIT:-5}
+      START_QUEUE_WORKERS: ${START_QUEUE_WORKERS:-false}
+      DB_QUERY_TIMEOUT_MS: ${DB_QUERY_TIMEOUT_MS:-5000}
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.wa-app.rule=Host(`ilovesanzhar.click`) || Host(`www.ilovesanzhar.click`)"

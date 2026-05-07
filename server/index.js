@@ -2399,17 +2399,21 @@ const server = httpServer.listen(PORT, async () => {
     logger.error('Failed to initialize Socket.IO:', error);
   }
 
-  initializeWorkers({
-    clients,
-    logger,
-    CONFIG,
-    checkRateLimit,
-    checkDailyLimit,
-    checkNeedRest,
-    sendMessageWithHumanBehavior,
-    messageCounters,
-    dailyLimits,
-  });
+  if (process.env.START_QUEUE_WORKERS === "true") {
+    initializeWorkers({
+      clients,
+      logger,
+      CONFIG,
+      checkRateLimit,
+      checkDailyLimit,
+      checkNeedRest,
+      sendMessageWithHumanBehavior,
+      messageCounters,
+      dailyLimits,
+    });
+  } else {
+    logger.info("Skipping BullMQ workers (START_QUEUE_WORKERS is not true)");
+  }
 
   try {
     const updated = await prisma.whatsAppAccount.updateMany({
