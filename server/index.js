@@ -125,6 +125,11 @@ async function withDbRetry(operation, maxRetries = 3) {
 function startDbHealthCheck() {
   const check = async () => {
     try {
+      if (!prisma) {
+        await reconnectPrisma();
+        return;
+      }
+
       await prisma.$queryRaw`SELECT 1`;
       if (!prismaConnected) {
         prismaConnected = true;
@@ -2434,6 +2439,8 @@ const server = httpServer.listen(PORT, async () => {
     io = await initSocketIO(httpServer, {
       clients,
       prisma,
+      getPrisma: () => prisma,
+      isPrismaConnected: () => prismaConnected,
       logger,
       CONFIG,
       initializeClient,

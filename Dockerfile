@@ -1,19 +1,11 @@
 # ==========================================
 # Build stage
 # ==========================================
-FROM node:20-alpine AS builder
+FROM node:20-bookworm-slim AS builder
 
 ENV NEXT_TELEMETRY_DISABLED=1
 
 WORKDIR /app
-
-# Install git and build dependencies (required for Baileys and native modules)
-RUN apk add --no-cache \
-    git \
-    python3 \
-    make \
-    g++ \
-    curl
 
 # Copy package files
 COPY package*.json ./
@@ -40,16 +32,13 @@ RUN npm prune --omit=dev && npm cache clean --force
 # ==========================================
 # Production stage
 # ==========================================
-FROM node:20-alpine
+FROM node:20-bookworm-slim
 
 # Set production environment variables
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1
 
 WORKDIR /app
-
-# Install git (required for Baileys in production)
-RUN apk add --no-cache git curl
 
 # Copy package files and pruned production dependencies from builder
 COPY package*.json ./
@@ -69,8 +58,8 @@ COPY ecosystem.config.js ./
 RUN mkdir -p .baileys_auth logs
 
 # Create non-root user for security
-RUN addgroup -g 1001 -S nodejs && \
-    adduser -S nodejs -u 1001 && \
+RUN groupadd --gid 1001 nodejs && \
+    useradd --uid 1001 --gid nodejs --shell /usr/sbin/nologin --create-home nodejs && \
     chown -R nodejs:nodejs /app
 
 # Switch to non-root user
@@ -81,7 +70,7 @@ EXPOSE 3000 5001
 
 # Health check - check both services (increased timeout for stability)
 HEALTHCHECK --interval=60s --timeout=30s --start-period=120s --retries=5 \
-    CMD curl -sf http://localhost:3000 -o /dev/null && curl -sf http://localhost:5001/health -o /dev/null || exit 1
+    CMD ["node", "-e", "const http=require('http');const check=(port,path='/')=>new Promise((resolve,reject)=>{const req=http.get({host:'127.0.0.1',port,path,timeout:5000},res=>{res.resume();res.statusCode<500?resolve():reject(new Error(String(res.statusCode)))});req.on('error',reject);req.on('timeout',()=>req.destroy(new Error('timeout')))});Promise.all([check(3000),check(5001,'/health')]).then(()=>process.exit(0),()=>process.exit(1));"]
 
 # Start with PM2 (auto-restarts processes if they crash)
 # --expose-gc allows manual GC calls for memory management

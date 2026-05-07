@@ -7,7 +7,7 @@ const path = require('path');
 const fs = require('fs');
 
 module.exports = function(io, dependencies) {
-  const { clients, prisma, logger, connectingAccounts, initializeClient, cleanupClient, reconnectAttempts } = dependencies;
+  const { clients, prisma, getPrisma, isPrismaConnected, logger, connectingAccounts, initializeClient, cleanupClient, reconnectAttempts } = dependencies;
   const accountsNS = io.of('/accounts');
   const DB_TIMEOUT_MS = parseInt(process.env.DB_QUERY_TIMEOUT_MS || '15000', 10);
 
@@ -21,6 +21,17 @@ module.exports = function(io, dependencies) {
         setTimeout(() => reject(new Error(`${label} timed out after ${DB_TIMEOUT_MS}ms`)), DB_TIMEOUT_MS)
       ),
     ]);
+  }
+
+  function requirePrisma(callback) {
+    const db = getPrisma ? getPrisma() : prisma;
+
+    if (!db || (isPrismaConnected && !isPrismaConnected())) {
+      callback({ success: false, error: 'Database is not connected' });
+      return null;
+    }
+
+    return db;
   }
 
   accountsNS.on('connection', (socket) => {
@@ -51,13 +62,12 @@ module.exports = function(io, dependencies) {
       }
 
       try {
-        if (!prisma) {
-          return callback({ success: false, error: 'Database is not connected' });
-        }
+        const db = requirePrisma(callback);
+        if (!db) return;
 
         logger.info('[Accounts NS] accounts:list loading accounts');
         const accounts = await withTimeout(
-          prisma.whatsAppAccount.findMany({
+          db.whatsAppAccount.findMany({
             orderBy: { createdAt: 'desc' },
           }),
           'accounts:list'
@@ -85,7 +95,10 @@ module.exports = function(io, dependencies) {
     // Get account by ID
     socket.on('account:get', async ({ accountId }, callback) => {
       try {
-        const account = await prisma.whatsAppAccount.findUnique({
+        const db = requirePrisma(callback);
+        if (!db) return;
+
+        const account = await db.whatsAppAccount.findUnique({
           where: { id: accountId },
         });
 
@@ -113,7 +126,10 @@ module.exports = function(io, dependencies) {
     // Create new account
     socket.on('account:create', async ({ name, useLimits = true }, callback) => {
       try {
-        const account = await prisma.whatsAppAccount.create({
+        const db = requirePrisma(callback);
+        if (!db) return;
+
+        const account = await db.whatsAppAccount.create({
           data: { name, useLimits },
         });
         logger.info(`[Accounts NS] Created account: ${account.id} (${name})`);
@@ -131,11 +147,14 @@ module.exports = function(io, dependencies) {
     // Update account
     socket.on('account:update', async ({ accountId, name, useLimits }, callback) => {
       try {
+        const db = requirePrisma(callback);
+        if (!db) return;
+
         const updateData = {};
         if (name !== undefined) updateData.name = name;
         if (useLimits !== undefined) updateData.useLimits = useLimits;
 
-        const account = await prisma.whatsAppAccount.update({
+        const account = await db.whatsAppAccount.update({
           where: { id: accountId },
           data: updateData,
         });
@@ -196,7 +215,10 @@ module.exports = function(io, dependencies) {
         }
 
         await cleanupClient(accountId);
-        await prisma.whatsAppAccount.update({
+        const db = requirePrisma(callback);
+        if (!db) return;
+
+        await db.whatsAppAccount.update({
           where: { id: accountId },
           data: { status: 'DISCONNECTED' },
         });
@@ -228,7 +250,10 @@ module.exports = function(io, dependencies) {
           fs.rmSync(sessionPath, { recursive: true, force: true });
         }
 
-        await prisma.whatsAppAccount.update({
+        const db = requirePrisma(callback);
+        if (!db) return;
+
+        await db.whatsAppAccount.update({
           where: { id: accountId },
           data: { status: 'DISCONNECTED' },
         });
@@ -243,7 +268,10 @@ module.exports = function(io, dependencies) {
     // Delete account
     socket.on('account:delete', async ({ accountId }, callback) => {
       try {
-        const account = await prisma.whatsAppAccount.findUnique({
+        const db = requirePrisma(callback);
+        if (!db) return;
+
+        const account = await db.whatsAppAccount.findUnique({
           where: { id: accountId },
         });
 
@@ -266,7 +294,7 @@ module.exports = function(io, dependencies) {
           fs.rmSync(sessionPath, { recursive: true, force: true });
         }
 
-        await prisma.whatsAppAccount.delete({
+        await db.whatsAppAccount.delete({
           where: { id: accountId },
         });
 

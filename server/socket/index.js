@@ -6,6 +6,8 @@ async function initSocketIO(httpServer, dependencies) {
   const {
     clients,
     prisma,
+    getPrisma,
+    isPrismaConnected,
     logger,
     initializeClient,
     cleanupClient,
@@ -47,6 +49,8 @@ async function initSocketIO(httpServer, dependencies) {
   const namespaceDeps = {
     clients,
     prisma,
+    getPrisma,
+    isPrismaConnected,
     logger,
     initializeClient,
     cleanupClient,

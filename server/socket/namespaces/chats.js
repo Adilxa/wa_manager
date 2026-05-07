@@ -4,11 +4,22 @@
  */
 
 module.exports = function(io, dependencies) {
-  const { clients, prisma, logger, messageQueues, enqueueMessage, processMessageQueue, initializeClient, cleanupClient } = dependencies;
+  const { clients, prisma, getPrisma, isPrismaConnected, logger, messageQueues, enqueueMessage, processMessageQueue, initializeClient, cleanupClient } = dependencies;
   const chatsNS = io.of('/chats');
 
   function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  function requirePrisma(callback) {
+    const db = getPrisma ? getPrisma() : prisma;
+
+    if (!db || (isPrismaConnected && !isPrismaConnected())) {
+      callback({ success: false, error: 'Database is not connected' });
+      return null;
+    }
+
+    return db;
   }
 
   chatsNS.on('connection', (socket) => {
@@ -28,6 +39,9 @@ module.exports = function(io, dependencies) {
     // Get all chats for an account
     socket.on('chats:list', async ({ accountId, page = 1, limit = 50, phone }, callback) => {
       try {
+        const db = requirePrisma(callback);
+        if (!db) return;
+
         const pageNum = parseInt(page);
         const limitNum = Math.min(parseInt(limit), 100);
         const skip = (pageNum - 1) * limitNum;
@@ -42,7 +56,7 @@ module.exports = function(io, dependencies) {
           ];
         }
 
-        const messages = await prisma.message.findMany({
+        const messages = await db.message.findMany({
           where,
           orderBy: { sentAt: 'desc' },
           take: 5000,
@@ -103,9 +117,12 @@ module.exports = function(io, dependencies) {
     // Get messages for a specific chat
     socket.on('chat:messages', async ({ accountId, chatId }, callback) => {
       try {
+        const db = requirePrisma(callback);
+        if (!db) return;
+
         const decodedChatId = decodeURIComponent(chatId);
 
-        const messages = await prisma.message.findMany({
+        const messages = await db.message.findMany({
           where: { accountId, chatId: decodedChatId },
           orderBy: { sentAt: 'asc' },
           take: 500,
@@ -121,6 +138,9 @@ module.exports = function(io, dependencies) {
     // Send message to a chat
     socket.on('chat:send', async ({ accountId, chatId, message }, callback) => {
       try {
+        const db = requirePrisma(callback);
+        if (!db) return;
+
         const decodedChatId = decodeURIComponent(chatId);
 
         if (!message) {
@@ -131,7 +151,7 @@ module.exports = function(io, dependencies) {
 
         if (!clientInfo || clientInfo.status !== 'CONNECTED') {
           try {
-            const account = await prisma.whatsAppAccount.findUnique({
+            const account = await db.whatsAppAccount.findUnique({
               where: { id: accountId },
             });
 
@@ -192,6 +212,9 @@ module.exports = function(io, dependencies) {
     // Send single message (for quick sends)
     socket.on('message:send', async ({ accountId, to, message }, callback) => {
       try {
+        const db = requirePrisma(callback);
+        if (!db) return;
+
         if (!accountId || !to || !message) {
           return callback({ success: false, error: 'Missing required fields' });
         }
@@ -200,7 +223,7 @@ module.exports = function(io, dependencies) {
 
         if (!clientInfo || clientInfo.status !== 'CONNECTED') {
           try {
-            const account = await prisma.whatsAppAccount.findUnique({
+            const account = await db.whatsAppAccount.findUnique({
               where: { id: accountId },
             });
 
