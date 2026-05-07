@@ -34,8 +34,8 @@ module.exports = {
     },
     {
       name: "nextjs-server",
-      script: "npx",
-      args: "next start",
+      script: "./node_modules/.bin/next",
+      args: "start",
       instances: 1,
       exec_mode: "fork",
       autorestart: true,
