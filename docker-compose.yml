@@ -129,6 +129,9 @@ services:
     expose:
       - "3000"
       - "5001"
+    command: >
+      sh -c "./node_modules/.bin/prisma db push --accept-data-loss &&
+             ./node_modules/.bin/pm2-runtime start ecosystem.config.js"
     env_file:
       - .env.production
     environment:

@@ -85,4 +85,4 @@ HEALTHCHECK --interval=60s --timeout=30s --start-period=120s --retries=5 \
 
 # Start with PM2 (auto-restarts processes if they crash)
 # --expose-gc allows manual GC calls for memory management
-CMD ["sh", "-c", "npx prisma db push --accept-data-loss && npm run start:pm2"]
+CMD ["sh", "-c", "./node_modules/.bin/prisma db push --accept-data-loss && ./node_modules/.bin/pm2-runtime start ecosystem.config.js"]
