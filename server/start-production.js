@@ -50,6 +50,7 @@ process.on("SIGINT", () => shutdown("SIGINT"));
 startProcess("api-server", "node", ["server/index.js"], {
   NODE_ENV: "production",
   API_PORT: process.env.API_PORT || "5001",
+  RESTORE_CONNECTED_CLIENTS: process.env.RESTORE_CONNECTED_CLIENTS || "false",
   API_MEMORY_LIMIT_MB:
     process.env.API_MEMORY_LIMIT_MB ||
     process.env.API_NODE_MAX_OLD_SPACE_SIZE ||
@@ -59,7 +60,14 @@ startProcess("api-server", "node", ["server/index.js"], {
   }`,
 });
 
-startProcess("nextjs-server", "./node_modules/.bin/next", ["start"], {
+startProcess("nextjs-server", "node", [
+  "node_modules/next/dist/bin/next",
+  "start",
+  "-H",
+  "0.0.0.0",
+  "-p",
+  "3000",
+], {
   NODE_ENV: "production",
   PORT: "3000",
   NODE_OPTIONS: `--max-old-space-size=${
