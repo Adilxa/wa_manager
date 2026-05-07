@@ -1,73 +1,22 @@
-# Mailing API
+# WhatsApp Messaging API
 
-Документация по REST API для полного сценария рассылки: от создания WhatsApp-аккаунта до отправки одиночного сообщения или массовой рассылки.
+Короткая инструкция для клиентов: как создать WhatsApp-аккаунт, подключить его и отправлять сообщения.
 
-## Базовые настройки
-
-Production URL:
+## Base URL
 
 ```text
 https://ilovesanzhar.click
 ```
 
-Локальный API внутри контейнера:
+Все запросы отправляются в JSON:
 
-```text
-http://localhost:5001
+```http
+Content-Type: application/json
 ```
 
-Для примеров ниже:
+## 1. Создать аккаунт
 
-```bash
-BASE_URL="https://ilovesanzhar.click"
-```
-
-Для реальной отправки WhatsApp должны быть включены клиенты:
-
-```env
-ENABLE_WHATSAPP_CLIENTS=true
-RESTORE_CONNECTED_CLIENTS=true
-RESTORE_CONNECTED_CLIENTS_LIMIT=2
-```
-
-Для отправки через BullMQ endpoints (`/api/messages/send`, `/api/contracts/:id/start`) должны быть включены workers:
-
-```env
-START_QUEUE_WORKERS=true
-```
-
-После изменения `.env.production` перезапусти app:
-
-```bash
-docker rm -f wa-manager
-docker compose --env-file .env.production up -d wa-manager
-```
-
-## 1. Проверить здоровье сервиса
-
-```bash
-curl -s "$BASE_URL/health"
-```
-
-Успешный ответ:
-
-```json
-{
-  "status": "ok",
-  "activeClients": 2,
-  "connectingClients": 0
-}
-```
-
-Проверить WebSocket:
-
-```bash
-curl -s "$BASE_URL/health/websocket"
-```
-
-## 2. Создать WhatsApp-аккаунт
-
-Endpoint:
+Создает новый WhatsApp-аккаунт в системе.
 
 ```http
 POST /api/accounts
@@ -85,7 +34,7 @@ Body:
 Пример:
 
 ```bash
-curl -s -X POST "$BASE_URL/api/accounts" \
+curl -X POST "https://ilovesanzhar.click/api/accounts" \
   -H "Content-Type: application/json" \
   -d '{
     "name": "Main WhatsApp",
@@ -97,7 +46,7 @@ curl -s -X POST "$BASE_URL/api/accounts" \
 
 ```json
 {
-  "id": "cmo1h2ejn0004qr2ansq3dq57",
+  "id": "account_id",
   "name": "Main WhatsApp",
   "phoneNumber": null,
   "status": "DISCONNECTED",
@@ -108,14 +57,14 @@ curl -s -X POST "$BASE_URL/api/accounts" \
 }
 ```
 
-Сохрани `id`. Дальше он используется как `accountId`.
+Сохраните `id`. Это `accountId` для следующих запросов.
 
-## 3. Подключить WhatsApp-аккаунт
+## 2. Подключить WhatsApp
 
-Endpoint:
+Запускает подключение WhatsApp-аккаунта.
 
 ```http
-POST /api/accounts/:id/connect
+POST /api/accounts/{accountId}/connect
 ```
 
 Body не нужен.
@@ -123,9 +72,7 @@ Body не нужен.
 Пример:
 
 ```bash
-ACCOUNT_ID="cmo1h2ejn0004qr2ansq3dq57"
-
-curl -s -X POST "$BASE_URL/api/accounts/$ACCOUNT_ID/connect"
+curl -X POST "https://ilovesanzhar.click/api/accounts/account_id/connect"
 ```
 
 Ответ:
@@ -137,26 +84,15 @@ curl -s -X POST "$BASE_URL/api/accounts/$ACCOUNT_ID/connect"
 }
 ```
 
-После этого аккаунт перейдет в один из статусов:
+После этого откройте QR-страницу и отсканируйте QR-код через WhatsApp:
 
 ```text
-CONNECTING
-QR_READY
-AUTHENTICATING
-CONNECTED
-FAILED
-DISCONNECTED
+https://ilovesanzhar.click/qr/account_id
 ```
 
-Если нужен QR, открой:
+## 3. Проверить статус аккаунта
 
-```text
-https://ilovesanzhar.click/qr/<accountId>
-```
-
-## 4. Проверить аккаунты и статус подключения
-
-Endpoint:
+Возвращает список всех аккаунтов и их состояние.
 
 ```http
 GET /api/accounts
@@ -165,7 +101,7 @@ GET /api/accounts
 Пример:
 
 ```bash
-curl -s "$BASE_URL/api/accounts"
+curl "https://ilovesanzhar.click/api/accounts"
 ```
 
 Ответ:
@@ -173,20 +109,18 @@ curl -s "$BASE_URL/api/accounts"
 ```json
 [
   {
-    "id": "cmo1h2ejn0004qr2ansq3dq57",
+    "id": "account_id",
     "name": "Main WhatsApp",
-    "phoneNumber": "996990559971",
+    "phoneNumber": "996700123456",
     "status": "CONNECTED",
     "clientStatus": "CONNECTED",
     "hasActiveClient": true,
-    "lastHeartbeat": 1778153934267,
-    "latency": 3,
     "useLimits": true
   }
 ]
 ```
 
-Для отправки важно:
+Аккаунт готов к отправке сообщений, когда:
 
 ```json
 {
@@ -195,11 +129,20 @@ curl -s "$BASE_URL/api/accounts"
 }
 ```
 
-Если `hasActiveClient=false`, аккаунт есть в базе, но реальный WhatsApp-клиент не поднят.
+Возможные статусы:
 
-## 5. Отправить одно сообщение
+```text
+DISCONNECTED
+CONNECTING
+QR_READY
+AUTHENTICATING
+CONNECTED
+FAILED
+```
 
-Endpoint:
+## 4. Отправить сообщение
+
+Отправляет сообщение через подключенный WhatsApp-аккаунт.
 
 ```http
 POST /api/messages/send
@@ -209,7 +152,7 @@ Body:
 
 ```json
 {
-  "accountId": "cmo1h2ejn0004qr2ansq3dq57",
+  "accountId": "account_id",
   "to": "996700123456",
   "message": "Здравствуйте! Это тестовое сообщение."
 }
@@ -218,10 +161,10 @@ Body:
 Пример:
 
 ```bash
-curl -s -X POST "$BASE_URL/api/messages/send" \
+curl -X POST "https://ilovesanzhar.click/api/messages/send" \
   -H "Content-Type: application/json" \
   -d '{
-    "accountId": "cmo1h2ejn0004qr2ansq3dq57",
+    "accountId": "account_id",
     "to": "996700123456",
     "message": "Здравствуйте! Это тестовое сообщение."
   }'
@@ -233,75 +176,142 @@ curl -s -X POST "$BASE_URL/api/messages/send" \
 {
   "success": true,
   "queued": true,
-  "messageId": "contract_id",
+  "messageId": "message_id",
   "contractId": "contract_id",
   "recipientId": "recipient_id",
-  "jobId": "123",
+  "jobId": "job_id",
   "queuePosition": 1,
   "queueLength": 1,
   "message": "Message queued for delivery"
 }
 ```
 
-Номер можно передавать цифрами:
+Если `queued=true`, сообщение принято системой и поставлено на отправку.
+
+## 5. Формат номера телефона
+
+Обычный формат:
 
 ```text
 996700123456
 79262555166
 ```
 
-Также поддерживаются готовые WhatsApp JID:
+Можно передавать номер с любыми символами, система оставит только цифры:
+
+```text
++996 (700) 123-456
+```
+
+Также поддерживается готовый WhatsApp JID:
 
 ```text
 996700123456@s.whatsapp.net
-120363000000000000@g.us
 ```
 
-## 6. Создать массовую рассылку
-
-Endpoint:
+## 6. Получить историю чатов аккаунта
 
 ```http
-POST /api/contracts
+GET /api/accounts/{accountId}/chats
+```
+
+Пример:
+
+```bash
+curl "https://ilovesanzhar.click/api/accounts/account_id/chats"
+```
+
+Ответ:
+
+```json
+{
+  "data": [
+    {
+      "chatId": "996700123456@s.whatsapp.net",
+      "contactNumber": "996700123456",
+      "contactName": "Client",
+      "messages": [],
+      "unreadCount": 0,
+      "lastMessageTime": "2026-05-07T11:00:00.000Z"
+    }
+  ],
+  "pagination": {
+    "total": 1,
+    "page": 1,
+    "limit": 50,
+    "totalPages": 1,
+    "hasNextPage": false,
+    "hasPrevPage": false
+  }
+}
+```
+
+Дополнительные query-параметры:
+
+```text
+page=1
+limit=50
+phone=996700
+```
+
+Пример с фильтром:
+
+```bash
+curl "https://ilovesanzhar.click/api/accounts/account_id/chats?page=1&limit=20&phone=996700"
+```
+
+## 7. Получить сообщения одного чата
+
+```http
+GET /api/accounts/{accountId}/chats/{chatId}
+```
+
+`chatId` должен быть URL-encoded.
+
+Пример:
+
+```bash
+curl "https://ilovesanzhar.click/api/accounts/account_id/chats/996700123456%40s.whatsapp.net"
+```
+
+Ответ:
+
+```json
+[
+  {
+    "id": "message_id",
+    "accountId": "account_id",
+    "chatId": "996700123456@s.whatsapp.net",
+    "direction": "OUTGOING",
+    "message": "Здравствуйте! Это тестовое сообщение.",
+    "to": "996700123456",
+    "status": "SENT",
+    "sentAt": "2026-05-07T11:00:00.000Z"
+  }
+]
+```
+
+## 8. Отправить сообщение в конкретный чат
+
+```http
+POST /api/accounts/{accountId}/chats/{chatId}
 ```
 
 Body:
 
 ```json
 {
-  "accountId": "cmo1h2ejn0004qr2ansq3dq57",
-  "name": "Рассылка клиентам 2026-05-07",
-  "recipients": [
-    {
-      "phoneNumber": "996700123456",
-      "message": "Здравствуйте! У нас новое предложение."
-    },
-    {
-      "phoneNumber": "996700654321",
-      "message": "Здравствуйте! У нас новое предложение."
-    }
-  ]
+  "message": "Здравствуйте! Повторное сообщение в чат."
 }
 ```
 
 Пример:
 
 ```bash
-curl -s -X POST "$BASE_URL/api/contracts" \
+curl -X POST "https://ilovesanzhar.click/api/accounts/account_id/chats/996700123456%40s.whatsapp.net" \
   -H "Content-Type: application/json" \
   -d '{
-    "accountId": "cmo1h2ejn0004qr2ansq3dq57",
-    "name": "Рассылка клиентам 2026-05-07",
-    "recipients": [
-      {
-        "phoneNumber": "996700123456",
-        "message": "Здравствуйте! У нас новое предложение."
-      },
-      {
-        "phoneNumber": "996700654321",
-        "message": "Здравствуйте! У нас новое предложение."
-      }
-    ]
+    "message": "Здравствуйте! Повторное сообщение в чат."
   }'
 ```
 
@@ -309,386 +319,93 @@ curl -s -X POST "$BASE_URL/api/contracts" \
 
 ```json
 {
-  "id": "contract_id",
-  "accountId": "cmo1h2ejn0004qr2ansq3dq57",
-  "name": "Рассылка клиентам 2026-05-07",
-  "totalCount": 2,
-  "successCount": 0,
-  "failureCount": 0,
-  "pendingCount": 2,
-  "status": "PENDING",
-  "recipients": [
-    {
-      "id": "recipient_id",
-      "phoneNumber": "996700123456",
-      "message": "Здравствуйте! У нас новое предложение.",
-      "status": "PENDING"
-    }
-  ]
-}
-```
-
-Сохрани `id`. Дальше он используется как `contractId`.
-
-## 7. Запустить массовую рассылку
-
-Endpoint:
-
-```http
-POST /api/contracts/:id/start
-```
-
-Body не нужен.
-
-Пример:
-
-```bash
-CONTRACT_ID="contract_id"
-
-curl -s -X POST "$BASE_URL/api/contracts/$CONTRACT_ID/start"
-```
-
-Ответ:
-
-```json
-{
   "success": true,
-  "message": "Contract queued",
-  "contractId": "contract_id",
-  "jobId": "contract-contract_id",
-  "pendingRecipients": 2
+  "queued": true,
+  "messageId": "message_id",
+  "queuePosition": 1,
+  "queueLength": 1,
+  "message": "Message queued for delivery"
 }
 ```
 
-Если ответ:
+## 9. Частые ошибки
 
-```json
-{
-  "error": "Account not connected"
-}
-```
-
-Сначала проверь аккаунт:
-
-```bash
-curl -s "$BASE_URL/api/accounts"
-```
-
-Нужны `clientStatus=CONNECTED` и `hasActiveClient=true`.
-
-## 8. Проверить статус рассылки
-
-Получить список рассылок:
-
-```bash
-curl -s "$BASE_URL/api/contracts?accountId=$ACCOUNT_ID"
-```
-
-Получить одну рассылку:
-
-```bash
-curl -s "$BASE_URL/api/contracts/$CONTRACT_ID"
-```
-
-Получить статистику:
-
-```bash
-curl -s "$BASE_URL/api/contracts/$CONTRACT_ID/stats"
-```
-
-Ответ статистики:
-
-```json
-{
-  "contractId": "contract_id",
-  "name": "Рассылка клиентам 2026-05-07",
-  "status": "IN_PROGRESS",
-  "total": 100,
-  "success": 35,
-  "failed": 2,
-  "pending": 63,
-  "successRate": "35.00%"
-}
-```
-
-Статусы рассылки:
-
-```text
-PENDING
-IN_PROGRESS
-PAUSED
-COMPLETED
-FAILED
-```
-
-Статусы получателей:
-
-```text
-PENDING
-QUEUED
-SENDING
-SUCCESS
-FAILED
-```
-
-## 9. Поставить рассылку на паузу
-
-Endpoint:
-
-```http
-POST /api/contracts/:id/pause
-```
-
-Пример:
-
-```bash
-curl -s -X POST "$BASE_URL/api/contracts/$CONTRACT_ID/pause"
-```
+### Аккаунт не подключен
 
 Ответ:
 
 ```json
 {
-  "success": true,
-  "message": "Contract paused"
+  "error": "Account is connecting. Try again in a few seconds.",
+  "status": "CONNECTING"
 }
 ```
 
-## 10. Проверить очереди
+Что делать:
 
-Endpoint:
+1. Проверить статус через `GET /api/accounts`.
+2. Дождаться `clientStatus=CONNECTED`.
+3. Если нужен QR, открыть `/qr/account_id`.
 
-```http
-GET /api/queues/status
-```
-
-Пример:
-
-```bash
-curl -s "$BASE_URL/api/queues/status"
-```
+### Аккаунт не найден
 
 Ответ:
 
 ```json
 {
-  "contracts": {
-    "waiting": 0,
-    "active": 0,
-    "completed": 1,
-    "failed": 0
-  },
-  "messages": {
-    "waiting": 10,
-    "active": 1,
-    "completed": 25,
-    "failed": 2
-  }
+  "error": "Account not found"
 }
 ```
 
-## 11. Получить очередь конкретного аккаунта
+Проверьте правильность `accountId`.
 
-Endpoint:
-
-```http
-GET /api/accounts/:id/queue
-```
-
-Пример:
-
-```bash
-curl -s "$BASE_URL/api/accounts/$ACCOUNT_ID/queue"
-```
+### Не заполнены обязательные поля
 
 Ответ:
 
 ```json
 {
-  "accountId": "cmo1h2ejn0004qr2ansq3dq57",
-  "queueLength": 0,
-  "status": {
-    "clientStatus": "CONNECTED",
-    "isResting": false,
-    "messagesSinceRest": 3
-  },
-  "limits": {
-    "dailyCount": 12,
-    "dailyLimit": 1000
-  }
+  "error": "Missing required fields"
 }
 ```
 
-## 12. Обновить аккаунт
-
-Endpoint:
-
-```http
-PUT /api/accounts/:id
-```
-
-Body:
+Для отправки сообщения обязательны:
 
 ```json
 {
-  "name": "Main WhatsApp Updated",
-  "useLimits": false
+  "accountId": "account_id",
+  "to": "996700123456",
+  "message": "Текст сообщения"
 }
 ```
 
-Пример:
-
-```bash
-curl -s -X PUT "$BASE_URL/api/accounts/$ACCOUNT_ID" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "Main WhatsApp Updated",
-    "useLimits": false
-  }'
-```
-
-`useLimits=true` включает мягкие лимиты и задержки. Для боевой рассылки лучше оставлять `true`.
-
-## 13. Отключить аккаунт
-
-Endpoint:
-
-```http
-POST /api/accounts/:id/disconnect
-```
-
-Пример:
-
-```bash
-curl -s -X POST "$BASE_URL/api/accounts/$ACCOUNT_ID/disconnect"
-```
-
-## 14. Сбросить сессию аккаунта
-
-Используй только если QR/сессия сломались.
-
-Endpoint:
-
-```http
-POST /api/accounts/:id/reset-session
-```
-
-Пример:
-
-```bash
-curl -s -X POST "$BASE_URL/api/accounts/$ACCOUNT_ID/reset-session"
-```
-
-После reset нужно снова вызвать `/connect` и отсканировать QR.
-
-## 15. Удалить аккаунт
-
-Endpoint:
-
-```http
-DELETE /api/accounts/:id
-```
-
-Пример:
-
-```bash
-curl -s -X DELETE "$BASE_URL/api/accounts/$ACCOUNT_ID"
-```
-
-## Полный минимальный flow
+## Минимальный рабочий сценарий
 
 ```bash
 BASE_URL="https://ilovesanzhar.click"
 
-# 1. Create account
-curl -s -X POST "$BASE_URL/api/accounts" \
+# 1. Создать аккаунт
+curl -X POST "$BASE_URL/api/accounts" \
   -H "Content-Type: application/json" \
   -d '{"name":"Main WhatsApp","useLimits":true}'
 
-# 2. Connect account
-ACCOUNT_ID="paste_account_id_here"
-curl -s -X POST "$BASE_URL/api/accounts/$ACCOUNT_ID/connect"
+# 2. Подключить аккаунт
+ACCOUNT_ID="account_id"
+curl -X POST "$BASE_URL/api/accounts/$ACCOUNT_ID/connect"
 
-# 3. Check status
-curl -s "$BASE_URL/api/accounts"
+# 3. Открыть QR
+# https://ilovesanzhar.click/qr/account_id
 
-# 4. Create mailing contract
-curl -s -X POST "$BASE_URL/api/contracts" \
+# 4. Проверить статус
+curl "$BASE_URL/api/accounts"
+
+# 5. Отправить сообщение
+curl -X POST "$BASE_URL/api/messages/send" \
   -H "Content-Type: application/json" \
   -d '{
     "accountId": "'$ACCOUNT_ID'",
-    "name": "Test mailing",
-    "recipients": [
-      {
-        "phoneNumber": "996700123456",
-        "message": "Здравствуйте! Тестовая рассылка."
-      }
-    ]
+    "to": "996700123456",
+    "message": "Здравствуйте! Это тестовое сообщение."
   }'
-
-# 5. Start mailing
-CONTRACT_ID="paste_contract_id_here"
-curl -s -X POST "$BASE_URL/api/contracts/$CONTRACT_ID/start"
-
-# 6. Check stats
-curl -s "$BASE_URL/api/contracts/$CONTRACT_ID/stats"
-```
-
-## Частые ошибки
-
-### `WhatsApp client initialization is disabled`
-
-В `.env.production` должно быть:
-
-```env
-ENABLE_WHATSAPP_CLIENTS=true
-```
-
-После изменения перезапусти контейнер.
-
-### `Account not connected`
-
-Аккаунт не поднят как активный клиент. Проверь:
-
-```bash
-curl -s "$BASE_URL/api/accounts"
-```
-
-Нужны:
-
-```json
-{
-  "clientStatus": "CONNECTED",
-  "hasActiveClient": true
-}
-```
-
-### Сообщения попали в очередь, но не отправляются
-
-Для BullMQ endpoints включи workers:
-
-```env
-START_QUEUE_WORKERS=true
-```
-
-Потом:
-
-```bash
-docker rm -f wa-manager
-docker compose --env-file .env.production up -d wa-manager
-```
-
-### VPS начинает грузиться
-
-Проверить:
-
-```bash
-docker stats --no-stream
-```
-
-Если CPU высокий, снизь количество одновременно восстанавливаемых клиентов:
-
-```env
-RESTORE_CONNECTED_CLIENTS_LIMIT=2
 ```
 
