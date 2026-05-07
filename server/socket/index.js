@@ -26,6 +26,10 @@ async function initSocketIO(httpServer, dependencies) {
     pingInterval: 25000
   });
 
+  for (const namespace of ['/accounts', '/chats', '/qr']) {
+    io.of(namespace);
+  }
+
   // Redis adapter for horizontal scaling
   const pubClient = new Redis({
     host: process.env.REDIS_HOST || 'redis',
