@@ -156,6 +156,7 @@ services:
       RESTORE_CONNECTED_CLIENTS: ${RESTORE_CONNECTED_CLIENTS:-false}
       RESTORE_CONNECTED_CLIENTS_LIMIT: ${RESTORE_CONNECTED_CLIENTS_LIMIT:-5}
       START_QUEUE_WORKERS: ${START_QUEUE_WORKERS:-false}
+      ENABLE_WHATSAPP_CLIENTS: ${ENABLE_WHATSAPP_CLIENTS:-false}
       DB_CONNECT_TIMEOUT_MS: ${DB_CONNECT_TIMEOUT_MS:-20000}
       DB_QUERY_TIMEOUT_MS: ${DB_QUERY_TIMEOUT_MS:-15000}
     labels:
@@ -167,7 +168,7 @@ services:
       - "traefik.http.routers.wa-app.service=wa-app"
       - "traefik.http.services.wa-app.loadbalancer.server.port=3000"
       # WebSocket routing
-      - "traefik.http.routers.wa-api.rule=(Host(`ilovesanzhar.click`) || Host(`www.ilovesanzhar.click`)) && (PathPrefix(`/api`) || PathPrefix(`/socket.io`) || Path(`/health`))"
+      - "traefik.http.routers.wa-api.rule=(Host(`ilovesanzhar.click`) || Host(`www.ilovesanzhar.click`)) && (PathPrefix(`/api`) || PathPrefix(`/socket.io`) || PathPrefix(`/health`))"
       - "traefik.http.routers.wa-api.entrypoints=websecure"
       - "traefik.http.routers.wa-api.priority=100"
       - "traefik.http.routers.wa-api.tls.certresolver=letsencrypt"

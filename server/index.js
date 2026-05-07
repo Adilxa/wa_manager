@@ -1103,6 +1103,10 @@ async function processMessageQueue(accountId) {
 // ==================== WHATSAPP CLIENT INITIALIZATION ====================
 
 async function initializeClient(accountId) {
+  if (process.env.ENABLE_WHATSAPP_CLIENTS !== "true") {
+    throw new Error("WhatsApp client initialization is disabled");
+  }
+
   if (isShuttingDown) {
     throw new Error("Server is shutting down");
   }

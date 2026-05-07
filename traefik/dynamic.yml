@@ -10,7 +10,7 @@ http:
         certResolver: letsencrypt
 
     wa-api:
-      rule: "(Host(`ilovesanzhar.click`) || Host(`www.ilovesanzhar.click`)) && (PathPrefix(`/api`) || PathPrefix(`/socket.io`) || Path(`/health`))"
+      rule: "(Host(`ilovesanzhar.click`) || Host(`www.ilovesanzhar.click`)) && (PathPrefix(`/api`) || PathPrefix(`/socket.io`) || PathPrefix(`/health`))"
       entryPoints:
         - websecure
       priority: 100
