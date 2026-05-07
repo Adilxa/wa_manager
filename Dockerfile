@@ -3,6 +3,8 @@
 # ==========================================
 FROM node:20-alpine AS builder
 
+ENV NEXT_TELEMETRY_DISABLED=1
+
 WORKDIR /app
 
 # Install git and build dependencies (required for Baileys and native modules)
@@ -31,7 +33,8 @@ ENV NEXT_PUBLIC_APP_URL=$NEXT_PUBLIC_APP_URL \
     NEXT_PUBLIC_USE_WEBSOCKET=$NEXT_PUBLIC_USE_WEBSOCKET
 
 # Generate Prisma client and build Next.js
-RUN npx prisma generate && npm run build
+RUN npx prisma generate
+RUN npm run build
 
 # ==========================================
 # Production stage

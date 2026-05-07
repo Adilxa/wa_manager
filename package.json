@@ -6,7 +6,7 @@
     "dev": "next dev",
     "dev:server": "node server/index.js",
     "dev:all": "concurrently \"npm run dev\" \"npm run dev:server\"",
-    "build": "next build",
+    "build": "next build --webpack",
     "start": "next start",
     "start:pm2": "pm2-runtime start ecosystem.config.js",
     "stop:pm2": "pm2 stop ecosystem.config.js",
