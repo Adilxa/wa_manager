@@ -1367,9 +1367,18 @@ async function initializeClient(accountId) {
 // Get all accounts
 app.get("/api/accounts", async (req, res) => {
   try {
-    const accounts = await prisma.whatsAppAccount.findMany({
+    const timeoutMs = parseInt(process.env.DB_QUERY_TIMEOUT_MS || "5000", 10);
+    const accountsQuery = prisma.whatsAppAccount.findMany({
       orderBy: { createdAt: "desc" },
     });
+    accountsQuery.catch(() => {});
+
+    const accounts = await Promise.race([
+      accountsQuery,
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error(`accounts query timed out after ${timeoutMs}ms`)), timeoutMs)
+      ),
+    ]);
 
     const accountsWithClientStatus = accounts.map(account => {
       const clientStatus = clients.get(account.id);

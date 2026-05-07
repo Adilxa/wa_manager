@@ -9,11 +9,26 @@ const fs = require('fs');
 module.exports = function(io, dependencies) {
   const { clients, prisma, logger, connectingAccounts, initializeClient, cleanupClient, reconnectAttempts } = dependencies;
   const accountsNS = io.of('/accounts');
+  const DB_TIMEOUT_MS = parseInt(process.env.DB_QUERY_TIMEOUT_MS || '5000', 10);
 
   const SESSIONS_DIR = path.join(process.cwd(), '.baileys_auth');
 
+  function withTimeout(promise, label) {
+    promise.catch(() => {});
+    return Promise.race([
+      promise,
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error(`${label} timed out after ${DB_TIMEOUT_MS}ms`)), DB_TIMEOUT_MS)
+      ),
+    ]);
+  }
+
   accountsNS.on('connection', (socket) => {
     logger.info(`[Accounts NS] Connected: ${socket.id}`);
+
+    socket.onAny((event, ...args) => {
+      logger.info(`[Accounts NS] Event ${event} from ${socket.id}, args=${args.map((arg) => typeof arg).join(',')}`);
+    });
 
     // Subscribe to account updates
     socket.on('join', (accountId) => {
@@ -36,9 +51,13 @@ module.exports = function(io, dependencies) {
       }
 
       try {
-        const accounts = await prisma.whatsAppAccount.findMany({
-          orderBy: { createdAt: 'desc' },
-        });
+        logger.info('[Accounts NS] accounts:list loading accounts');
+        const accounts = await withTimeout(
+          prisma.whatsAppAccount.findMany({
+            orderBy: { createdAt: 'desc' },
+          }),
+          'accounts:list'
+        );
 
         const accountsWithClientStatus = accounts.map(account => {
           const clientStatus = clients.get(account.id);
@@ -51,6 +70,7 @@ module.exports = function(io, dependencies) {
           };
         });
 
+        logger.info(`[Accounts NS] accounts:list returned ${accountsWithClientStatus.length} account(s)`);
         callback({ success: true, data: accountsWithClientStatus });
       } catch (error) {
         logger.error('[Accounts NS] Failed to list accounts:', error.message);
