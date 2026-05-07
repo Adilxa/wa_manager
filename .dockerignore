@@ -19,6 +19,9 @@ out/
 *.log
 
 # Local env files
+.env
+.env.production
+.env.*
 .env*.local
 
 # Vercel

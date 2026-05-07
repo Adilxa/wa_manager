@@ -8,12 +8,17 @@
 import { io, Socket } from 'socket.io-client';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001';
+const USE_WEBSOCKET = process.env.NEXT_PUBLIC_USE_WEBSOCKET !== 'false';
 
 type SocketCallback<T = any> = (response: { success: boolean; data?: T; error?: string }) => void;
 
 class SocketManager {
   private sockets: Map<string, Socket> = new Map();
   private listeners: Map<string, Map<string, Function[]>> = new Map();
+
+  isEnabled(): boolean {
+    return USE_WEBSOCKET;
+  }
 
   /**
    * Get or create a socket for a namespace

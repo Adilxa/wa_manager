@@ -1,4 +1,37 @@
 http:
+  routers:
+    wa-app:
+      rule: "Host(`ilovesanzhar.click`) || Host(`www.ilovesanzhar.click`)"
+      entryPoints:
+        - websecure
+      priority: 1
+      service: wa-app
+      tls:
+        certResolver: letsencrypt
+
+    wa-api:
+      rule: "(Host(`ilovesanzhar.click`) || Host(`www.ilovesanzhar.click`)) && (PathPrefix(`/api`) || PathPrefix(`/socket.io`) || Path(`/health`))"
+      entryPoints:
+        - websecure
+      priority: 100
+      service: wa-api
+      tls:
+        certResolver: letsencrypt
+
+  services:
+    wa-app:
+      loadBalancer:
+        servers:
+          - url: "http://wa-manager:3000"
+
+    wa-api:
+      loadBalancer:
+        sticky:
+          cookie:
+            name: server_id
+        servers:
+          - url: "http://wa-manager:5001"
+
   middlewares:
     rate-limit:
       rateLimit:

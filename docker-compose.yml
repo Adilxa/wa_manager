@@ -111,6 +111,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-https://ilovesanzhar.click}
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-https://ilovesanzhar.click}
+        NEXT_PUBLIC_USE_WEBSOCKET: ${NEXT_PUBLIC_USE_WEBSOCKET:-true}
     container_name: wa-manager
     restart: unless-stopped
     depends_on:
@@ -122,6 +126,8 @@ services:
     expose:
       - "3000"
       - "5001"
+    env_file:
+      - .env.production
     environment:
       # Prisma connection pool: 10 connections (reduced to save memory)
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/wa_manager?schema=public&connection_limit=10&pool_timeout=10&connect_timeout=30
@@ -129,28 +135,36 @@ services:
       REDIS_HOST: redis
       REDIS_PORT: 6379
       REDIS_PASSWORD: ${REDIS_PASSWORD:-adilhankrasavchikvoobshebomba}
-      NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-http://localhost:3000}
-      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:5001}
-      NEXT_PUBLIC_USE_WEBSOCKET: ${NEXT_PUBLIC_USE_WEBSOCKET:-false}
+      NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-https://ilovesanzhar.click}
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-https://ilovesanzhar.click}
+      NEXT_PUBLIC_USE_WEBSOCKET: ${NEXT_PUBLIC_USE_WEBSOCKET:-true}
       API_PORT: 5001
       API_SECRET_KEY: ${API_SECRET_KEY}
       NODE_ENV: production
       # Enable Node.js optimizations
       UV_THREADPOOL_SIZE: 4
+      API_MAX_MEMORY_RESTART: ${API_MAX_MEMORY_RESTART:-10G}
+      API_NODE_MAX_OLD_SPACE_SIZE: ${API_NODE_MAX_OLD_SPACE_SIZE:-9216}
+      API_MEMORY_LIMIT_MB: ${API_MEMORY_LIMIT_MB:-9216}
+      NEXTJS_MAX_MEMORY_RESTART: ${NEXTJS_MAX_MEMORY_RESTART:-768M}
+      NEXTJS_NODE_MAX_OLD_SPACE_SIZE: ${NEXTJS_NODE_MAX_OLD_SPACE_SIZE:-512}
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.wa-app.rule=Host(`ilovesanzhar.click`)"
+      - "traefik.http.routers.wa-app.rule=Host(`ilovesanzhar.click`) || Host(`www.ilovesanzhar.click`)"
       - "traefik.http.routers.wa-app.entrypoints=websecure"
+      - "traefik.http.routers.wa-app.priority=1"
       - "traefik.http.routers.wa-app.tls.certresolver=letsencrypt"
       - "traefik.http.routers.wa-app.service=wa-app"
       - "traefik.http.services.wa-app.loadbalancer.server.port=3000"
       # WebSocket routing
-      - "traefik.http.routers.wa-api.rule=Host(`ilovesanzhar.click`) && PathPrefix(`/api`, `/socket.io`)"
+      - "traefik.http.routers.wa-api.rule=(Host(`ilovesanzhar.click`) || Host(`www.ilovesanzhar.click`)) && (PathPrefix(`/api`) || PathPrefix(`/socket.io`) || Path(`/health`))"
       - "traefik.http.routers.wa-api.entrypoints=websecure"
+      - "traefik.http.routers.wa-api.priority=100"
       - "traefik.http.routers.wa-api.tls.certresolver=letsencrypt"
       - "traefik.http.routers.wa-api.service=wa-api"
       - "traefik.http.services.wa-api.loadbalancer.server.port=5001"
       - "traefik.http.services.wa-api.loadbalancer.sticky.cookie.name=server_id"
+    mem_limit: ${WA_MANAGER_MEMORY_LIMIT:-12g}
     volumes:
       - baileys_auth:/app/.baileys_auth
       - wa_logs:/app/logs
@@ -179,11 +193,11 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "2.0"
-          memory: 6144M
+          cpus: "${WA_MANAGER_CPU_LIMIT:-4.0}"
+          memory: ${WA_MANAGER_MEMORY_LIMIT:-12G}
         reservations:
           cpus: "0.5"
-          memory: 3072M
+          memory: ${WA_MANAGER_MEMORY_RESERVATION:-4096M}
       # Политика перезапуска при сбое
       restart_policy:
         condition: on-failure

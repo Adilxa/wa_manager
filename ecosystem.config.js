@@ -7,13 +7,13 @@ module.exports = {
       exec_mode: "fork",
       autorestart: true,
       watch: false,
-      // Restart only on memory limit - 5GB for 50+ clients
-      max_memory_restart: "5200M",
+      // Restart only on memory limit. Keep this aligned with API_NODE_MAX_OLD_SPACE_SIZE.
+      max_memory_restart: process.env.API_MAX_MEMORY_RESTART || "10G",
       env: {
         NODE_ENV: "production",
         API_PORT: process.env.API_PORT || 5001,
-        // Enable garbage collection - 5GB heap for 50+ accounts
-        NODE_OPTIONS: "--expose-gc --max-old-space-size=5120",
+        API_MEMORY_LIMIT_MB: process.env.API_MEMORY_LIMIT_MB || process.env.API_NODE_MAX_OLD_SPACE_SIZE || "9216",
+        NODE_OPTIONS: `--expose-gc --max-old-space-size=${process.env.API_NODE_MAX_OLD_SPACE_SIZE || "9216"}`,
       },
       // Restart strategy
       min_uptime: "10s",
@@ -41,11 +41,11 @@ module.exports = {
       autorestart: true,
       watch: false,
       // Restart only on memory limit
-      max_memory_restart: "500M",
+      max_memory_restart: process.env.NEXTJS_MAX_MEMORY_RESTART || "768M",
       env: {
         NODE_ENV: "production",
         PORT: 3000,
-        NODE_OPTIONS: "--max-old-space-size=400",
+        NODE_OPTIONS: `--max-old-space-size=${process.env.NEXTJS_NODE_MAX_OLD_SPACE_SIZE || "512"}`,
       },
       // Restart strategy
       min_uptime: "10s",

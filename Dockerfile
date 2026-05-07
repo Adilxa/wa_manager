@@ -22,6 +22,14 @@ RUN npm ci
 # Copy all source files
 COPY . .
 
+ARG NEXT_PUBLIC_APP_URL=https://ilovesanzhar.click
+ARG NEXT_PUBLIC_API_URL=https://ilovesanzhar.click
+ARG NEXT_PUBLIC_USE_WEBSOCKET=true
+
+ENV NEXT_PUBLIC_APP_URL=$NEXT_PUBLIC_APP_URL \
+    NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL \
+    NEXT_PUBLIC_USE_WEBSOCKET=$NEXT_PUBLIC_USE_WEBSOCKET
+
 # Generate Prisma client and build Next.js
 RUN npx prisma generate && npm run build
 

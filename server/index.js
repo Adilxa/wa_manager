@@ -187,11 +187,11 @@ const CONFIG = {
   DAILY_NEW_CHATS_LIMIT: 100,
 
   // Memory management - CRITICAL FOR 100+ USERS
-  // Thresholds are percentage of MAX_HEAP (8GB), not current heap
+  // Thresholds are percentage of API_MEMORY_LIMIT_MB/NODE_OPTIONS heap, not current heap
   MEMORY_CHECK_INTERVAL: 30000, // Check every 30 seconds
-  MEMORY_WARNING_THRESHOLD: 0.50, // Warn at 50% of 8GB = 4GB
-  MEMORY_CRITICAL_THRESHOLD: 0.70, // Critical at 70% of 8GB = 5.6GB
-  MEMORY_EMERGENCY_THRESHOLD: 0.85, // Emergency at 85% of 8GB = 6.8GB
+  MEMORY_WARNING_THRESHOLD: 0.50,
+  MEMORY_CRITICAL_THRESHOLD: 0.70,
+  MEMORY_EMERGENCY_THRESHOLD: 0.85,
 
   // Cleanup intervals
   CLEANUP_INTERVAL: 300000, // Cleanup every 5 minutes
@@ -217,7 +217,7 @@ const CONFIG = {
   REST_DURATION_MAX: 120000,
 
   // Per-client limits
-  MAX_CLIENTS: 150, // Maximum concurrent clients
+  MAX_CLIENTS: parseInt(process.env.MAX_CLIENTS || "150", 10), // Maximum concurrent clients
   MAX_QUEUE_SIZE_PER_CLIENT: 1000, // Maximum queue size per client
 };
 
@@ -724,13 +724,29 @@ function stopHeartbeat() {
 
 // ==================== MEMORY MANAGEMENT ====================
 
+function getConfiguredMemoryLimitMb() {
+  const explicitLimit = parseInt(process.env.API_MEMORY_LIMIT_MB || "", 10);
+  if (Number.isFinite(explicitLimit) && explicitLimit > 0) {
+    return explicitLimit;
+  }
+
+  const maxOldSpaceMatch = (process.env.NODE_OPTIONS || "").match(/--max-old-space-size=(\d+)/);
+  if (maxOldSpaceMatch) {
+    return parseInt(maxOldSpaceMatch[1], 10);
+  }
+
+  return 5120;
+}
+
 function startMemoryMonitor() {
   if (memoryMonitorInterval) {
     clearInterval(memoryMonitorInterval);
   }
 
-  // Max heap size from NODE_OPTIONS (5GB = 5120MB for 50+ clients)
-  const MAX_HEAP_MB = 5120;
+  const MAX_HEAP_MB = getConfiguredMemoryLimitMb();
+  const warningFloorMb = Math.max(2500, Math.round(MAX_HEAP_MB * 0.35));
+  const criticalFloorMb = Math.max(3500, Math.round(MAX_HEAP_MB * 0.50));
+  const emergencyFloorMb = Math.max(4300, Math.round(MAX_HEAP_MB * 0.65));
 
   memoryMonitorInterval = setInterval(async () => {
     const used = process.memoryUsage();
@@ -740,7 +756,7 @@ function startMemoryMonitor() {
     const heapPercent = rssMB / MAX_HEAP_MB;
 
     // Emergency - disconnect clients to save memory (only if using significant memory)
-    if (heapPercent > CONFIG.MEMORY_EMERGENCY_THRESHOLD && rssMB > 4300) {
+    if (heapPercent > CONFIG.MEMORY_EMERGENCY_THRESHOLD && rssMB > emergencyFloorMb) {
       logger.error(`EMERGENCY: Memory at ${rssMB}MB / ${MAX_HEAP_MB}MB (${Math.round(heapPercent * 100)}%)`);
 
       // Force GC multiple times
@@ -772,7 +788,7 @@ function startMemoryMonitor() {
       signalKeyCache.clear();
     }
     // Critical - cleanup and GC (only if using significant memory)
-    else if (heapPercent > CONFIG.MEMORY_CRITICAL_THRESHOLD && rssMB > 3500) {
+    else if (heapPercent > CONFIG.MEMORY_CRITICAL_THRESHOLD && rssMB > criticalFloorMb) {
       logger.error(`CRITICAL: Memory at ${rssMB}MB / ${MAX_HEAP_MB}MB (${Math.round(heapPercent * 100)}%)`);
       cleanupMaps();
       forceGC();
@@ -797,14 +813,14 @@ function startMemoryMonitor() {
       }
     }
     // Warning - just cleanup and GC (only if using significant memory)
-    else if (heapPercent > CONFIG.MEMORY_WARNING_THRESHOLD && rssMB > 2500) {
+    else if (heapPercent > CONFIG.MEMORY_WARNING_THRESHOLD && rssMB > warningFloorMb) {
       logger.warn(`WARNING: Memory at ${rssMB}MB / ${MAX_HEAP_MB}MB (${Math.round(heapPercent * 100)}%)`);
       cleanupMaps();
       forceGC();
     }
   }, CONFIG.MEMORY_CHECK_INTERVAL);
 
-  logger.info("Memory monitor started");
+  logger.info(`Memory monitor started (limit: ${MAX_HEAP_MB}MB)`);
 }
 
 // ==================== WATCHDOG ====================

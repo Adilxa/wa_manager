@@ -24,6 +24,7 @@ interface Account {
   name: string;
   phoneNumber: string | null;
   status: string;
+  clientStatus?: string;
 }
 
 interface Chat {

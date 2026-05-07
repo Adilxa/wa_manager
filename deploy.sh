@@ -37,16 +37,23 @@ if [ "$EUID" -eq 0 ]; then
     exit 1
 fi
 
-# Check if .env file exists
-if [ ! -f .env ]; then
-    print_msg $RED "❌ Файл .env не найден!"
-    print_msg $YELLOW "Создайте .env файл с необходимыми переменными"
+# Check if env file exists
+ENV_FILE=".env"
+if [ ! -f "$ENV_FILE" ] && [ -f ".env.production" ]; then
+    ENV_FILE=".env.production"
+fi
+
+if [ ! -f "$ENV_FILE" ]; then
+    print_msg $RED "❌ Файл .env или .env.production не найден!"
+    print_msg $YELLOW "Создайте .env.production файл с необходимыми переменными"
     exit 1
 fi
 
 # Load environment variables
-print_msg $BLUE "📦 Загрузка переменных окружения..."
-export $(cat .env | grep -v '^#' | xargs)
+print_msg $BLUE "📦 Загрузка переменных окружения из $ENV_FILE..."
+set -a
+. "./$ENV_FILE"
+set +a
 
 # Validate required variables
 if [ -z "$NEXT_PUBLIC_APP_URL" ]; then
@@ -140,9 +147,9 @@ fi
 
 # Determine Docker Compose command
 if docker compose version &> /dev/null; then
-    DOCKER_COMPOSE="docker compose"
+    DOCKER_COMPOSE="docker compose --env-file $ENV_FILE"
 else
-    DOCKER_COMPOSE="docker-compose"
+    DOCKER_COMPOSE="docker-compose --env-file $ENV_FILE"
 fi
 
 # Stop existing containers
