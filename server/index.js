@@ -41,11 +41,9 @@ function createPrismaClient() {
 
 async function connectPrisma() {
   try {
-    if (prisma) {
-      await prisma.$disconnect().catch(() => {});
+    if (!prisma) {
+      prisma = createPrismaClient();
     }
-
-    prisma = createPrismaClient();
 
     const connectAndPing = async () => {
       await prisma.$connect();
