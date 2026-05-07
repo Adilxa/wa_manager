@@ -1382,6 +1382,30 @@ async function initializeClient(accountId) {
 
 // ==================== API ROUTES ====================
 
+function getPublicClientStatus(account, clientStatus) {
+  if (clientStatus?.status) {
+    return clientStatus.status;
+  }
+
+  if (process.env.ENABLE_WHATSAPP_CLIENTS !== "true" && account.status === "CONNECTED") {
+    return "DISCONNECTED";
+  }
+
+  return account.status;
+}
+
+function withPublicClientStatus(account) {
+  const clientStatus = clients.get(account.id);
+
+  return {
+    ...account,
+    clientStatus: getPublicClientStatus(account, clientStatus),
+    hasActiveClient: !!clientStatus,
+    lastHeartbeat: clientStatus?.lastHeartbeat || null,
+    latency: clientStatus?.latency || null,
+  };
+}
+
 // Get all accounts
 app.get("/api/accounts", async (req, res) => {
   try {
@@ -1402,16 +1426,7 @@ app.get("/api/accounts", async (req, res) => {
       ),
     ]);
 
-    const accountsWithClientStatus = accounts.map(account => {
-      const clientStatus = clients.get(account.id);
-      return {
-        ...account,
-        clientStatus: clientStatus?.status || account.status,
-        hasActiveClient: !!clientStatus,
-        lastHeartbeat: clientStatus?.lastHeartbeat || null,
-        latency: clientStatus?.latency || null,
-      };
-    });
+    const accountsWithClientStatus = accounts.map(withPublicClientStatus);
 
     res.json(accountsWithClientStatus);
   } catch (error) {
@@ -1446,14 +1461,7 @@ app.get("/api/accounts/:id", async (req, res) => {
       return res.status(404).json({ error: "Account not found" });
     }
 
-    const clientStatus = clients.get(req.params.id);
-    res.json({
-      ...account,
-      clientStatus: clientStatus?.status || account.status,
-      hasActiveClient: !!clientStatus,
-      lastHeartbeat: clientStatus?.lastHeartbeat || null,
-      latency: clientStatus?.latency || null,
-    });
+    res.json(withPublicClientStatus(account));
   } catch (error) {
     logger.error("Failed to get account:", error.message);
     res.status(500).json({ error: error.message });
@@ -1486,6 +1494,10 @@ app.put("/api/accounts/:id", async (req, res) => {
 app.post("/api/accounts/:id/connect", async (req, res) => {
   try {
     const accountId = req.params.id;
+
+    if (process.env.ENABLE_WHATSAPP_CLIENTS !== "true") {
+      return res.status(503).json({ error: "WhatsApp client initialization is disabled" });
+    }
 
     if (connectingAccounts.has(accountId)) {
       return res.status(400).json({ error: "Client is already being initialized" });

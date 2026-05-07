@@ -53,7 +53,7 @@ export default function ChatPage() {
   const { messages } = useChatMessages(selectedAccount?.id || null, selectedChat?.chatId || null);
 
   // Filter connected accounts
-  const connectedAccounts = accounts.filter((acc: Account) => acc.status === 'CONNECTED' || acc.clientStatus === 'CONNECTED');
+  const connectedAccounts = accounts.filter((acc: Account) => acc.clientStatus === 'CONNECTED');
 
   // Check authentication
   useEffect(() => {

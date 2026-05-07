@@ -34,6 +34,30 @@ module.exports = function(io, dependencies) {
     return db;
   }
 
+  function getPublicClientStatus(account, clientStatus) {
+    if (clientStatus?.status) {
+      return clientStatus.status;
+    }
+
+    if (process.env.ENABLE_WHATSAPP_CLIENTS !== 'true' && account.status === 'CONNECTED') {
+      return 'DISCONNECTED';
+    }
+
+    return account.status;
+  }
+
+  function withPublicClientStatus(account) {
+    const clientStatus = clients.get(account.id);
+
+    return {
+      ...account,
+      clientStatus: getPublicClientStatus(account, clientStatus),
+      hasActiveClient: !!clientStatus,
+      lastHeartbeat: clientStatus?.lastHeartbeat || null,
+      latency: clientStatus?.latency || null,
+    };
+  }
+
   accountsNS.on('connection', (socket) => {
     logger.info(`[Accounts NS] Connected: ${socket.id}`);
 
@@ -73,16 +97,7 @@ module.exports = function(io, dependencies) {
           'accounts:list'
         );
 
-        const accountsWithClientStatus = accounts.map(account => {
-          const clientStatus = clients.get(account.id);
-          return {
-            ...account,
-            clientStatus: clientStatus?.status || account.status,
-            hasActiveClient: !!clientStatus,
-            lastHeartbeat: clientStatus?.lastHeartbeat || null,
-            latency: clientStatus?.latency || null,
-          };
-        });
+        const accountsWithClientStatus = accounts.map(withPublicClientStatus);
 
         logger.info(`[Accounts NS] accounts:list returned ${accountsWithClientStatus.length} account(s)`);
         callback({ success: true, data: accountsWithClientStatus });
@@ -106,16 +121,9 @@ module.exports = function(io, dependencies) {
           return callback({ success: false, error: 'Account not found' });
         }
 
-        const clientStatus = clients.get(accountId);
         callback({
           success: true,
-          data: {
-            ...account,
-            clientStatus: clientStatus?.status || account.status,
-            hasActiveClient: !!clientStatus,
-            lastHeartbeat: clientStatus?.lastHeartbeat || null,
-            latency: clientStatus?.latency || null,
-          }
+          data: withPublicClientStatus(account)
         });
       } catch (error) {
         logger.error('[Accounts NS] Failed to get account:', error.message);
@@ -172,6 +180,10 @@ module.exports = function(io, dependencies) {
     // Connect account (start WhatsApp session)
     socket.on('account:connect', async ({ accountId }, callback) => {
       try {
+        if (process.env.ENABLE_WHATSAPP_CLIENTS !== 'true') {
+          return callback({ success: false, error: 'WhatsApp client initialization is disabled' });
+        }
+
         if (connectingAccounts.has(accountId)) {
           return callback({ success: false, error: 'Client is already being initialized' });
         }
