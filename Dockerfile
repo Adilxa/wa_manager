@@ -85,4 +85,4 @@ HEALTHCHECK --interval=60s --timeout=30s --start-period=120s --retries=5 \
 
 # Start with PM2 (auto-restarts processes if they crash)
 # --expose-gc allows manual GC calls for memory management
-CMD ["sh", "-c", "./node_modules/.bin/pm2-runtime start ecosystem.config.js"]
+CMD ["node", "server/start-production.js"]

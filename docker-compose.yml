@@ -129,8 +129,7 @@ services:
     expose:
       - "3000"
       - "5001"
-    command: >
-      sh -c "./node_modules/.bin/pm2-runtime start ecosystem.config.js"
+    command: ["node", "server/start-production.js"]
     env_file:
       - .env.production
     environment:
@@ -171,6 +170,7 @@ services:
       - "traefik.http.services.wa-api.loadbalancer.sticky.cookie.name=server_id"
     mem_limit: ${WA_MANAGER_MEMORY_LIMIT:-12g}
     volumes:
+      - ./server/start-production.js:/app/server/start-production.js:ro
       - baileys_auth:/app/.baileys_auth
       - wa_logs:/app/logs
     networks:
