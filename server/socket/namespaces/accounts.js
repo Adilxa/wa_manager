@@ -9,7 +9,7 @@ const fs = require('fs');
 module.exports = function(io, dependencies) {
   const { clients, prisma, logger, connectingAccounts, initializeClient, cleanupClient, reconnectAttempts } = dependencies;
   const accountsNS = io.of('/accounts');
-  const DB_TIMEOUT_MS = parseInt(process.env.DB_QUERY_TIMEOUT_MS || '5000', 10);
+  const DB_TIMEOUT_MS = parseInt(process.env.DB_QUERY_TIMEOUT_MS || '15000', 10);
 
   const SESSIONS_DIR = path.join(process.cwd(), '.baileys_auth');
 

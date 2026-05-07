@@ -156,7 +156,8 @@ services:
       RESTORE_CONNECTED_CLIENTS: ${RESTORE_CONNECTED_CLIENTS:-false}
       RESTORE_CONNECTED_CLIENTS_LIMIT: ${RESTORE_CONNECTED_CLIENTS_LIMIT:-5}
       START_QUEUE_WORKERS: ${START_QUEUE_WORKERS:-false}
-      DB_QUERY_TIMEOUT_MS: ${DB_QUERY_TIMEOUT_MS:-5000}
+      DB_CONNECT_TIMEOUT_MS: ${DB_CONNECT_TIMEOUT_MS:-20000}
+      DB_QUERY_TIMEOUT_MS: ${DB_QUERY_TIMEOUT_MS:-15000}
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.wa-app.rule=Host(`ilovesanzhar.click`) || Host(`www.ilovesanzhar.click`)"

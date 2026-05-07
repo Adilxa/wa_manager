@@ -25,6 +25,7 @@ let prismaReconnectAttempts = 0;
 const MAX_PRISMA_RECONNECT_ATTEMPTS = 10;
 const PRISMA_RECONNECT_DELAY = 5000;
 const DB_HEALTH_CHECK_INTERVAL = 60000; // Check DB connection every minute
+const DB_CONNECT_TIMEOUT = parseInt(process.env.DB_CONNECT_TIMEOUT_MS || "20000", 10);
 
 function createPrismaClient() {
   return new PrismaClient({
@@ -45,8 +46,17 @@ async function connectPrisma() {
 
     prisma = createPrismaClient();
 
-    // Test connection
-    await prisma.$queryRaw`SELECT 1`;
+    const connectAndPing = async () => {
+      await prisma.$connect();
+      await prisma.$queryRaw`SELECT 1`;
+    };
+
+    await Promise.race([
+      connectAndPing(),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error(`PostgreSQL connect timed out after ${DB_CONNECT_TIMEOUT}ms`)), DB_CONNECT_TIMEOUT)
+      ),
+    ]);
 
     prismaConnected = true;
     prismaReconnectAttempts = 0;
@@ -114,7 +124,7 @@ async function withDbRetry(operation, maxRetries = 3) {
 
 // Periodic DB health check
 function startDbHealthCheck() {
-  setInterval(async () => {
+  const check = async () => {
     try {
       await prisma.$queryRaw`SELECT 1`;
       if (!prismaConnected) {
@@ -127,7 +137,10 @@ function startDbHealthCheck() {
       prismaConnected = false;
       reconnectPrisma();
     }
-  }, DB_HEALTH_CHECK_INTERVAL);
+  };
+
+  check();
+  setInterval(check, DB_HEALTH_CHECK_INTERVAL);
 
   console.log(`[DB] Health check started (interval: ${DB_HEALTH_CHECK_INTERVAL / 1000}s)`);
 }
@@ -1367,7 +1380,7 @@ async function initializeClient(accountId) {
 // Get all accounts
 app.get("/api/accounts", async (req, res) => {
   try {
-    const timeoutMs = parseInt(process.env.DB_QUERY_TIMEOUT_MS || "5000", 10);
+    const timeoutMs = parseInt(process.env.DB_QUERY_TIMEOUT_MS || "15000", 10);
     const accountsQuery = prisma.whatsAppAccount.findMany({
       orderBy: { createdAt: "desc" },
     });
@@ -2377,6 +2390,8 @@ let io;
 const server = httpServer.listen(PORT, async () => {
   logger.info(`WhatsApp API Server on port ${PORT}`);
   logger.info(`Max clients: ${CONFIG.MAX_CLIENTS}`);
+  logger.info("[DB] Connecting to PostgreSQL...");
+  await connectPrisma();
 
   // Initialize Socket.IO with all dependencies
   try {
