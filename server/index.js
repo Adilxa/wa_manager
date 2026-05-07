@@ -40,14 +40,12 @@ function createPrismaClient() {
 }
 
 async function connectPrisma() {
-  try {
-    if (!prisma) {
-      prisma = createPrismaClient();
-    }
+  const nextPrisma = createPrismaClient();
 
+  try {
     const connectAndPing = async () => {
-      await prisma.$connect();
-      await prisma.$queryRaw`SELECT 1`;
+      await nextPrisma.$connect();
+      await nextPrisma.$queryRaw`SELECT 1`;
     };
 
     await Promise.race([
@@ -57,11 +55,13 @@ async function connectPrisma() {
       ),
     ]);
 
+    prisma = nextPrisma;
     prismaConnected = true;
     prismaReconnectAttempts = 0;
     console.log("[DB] PostgreSQL connected successfully");
     return true;
   } catch (error) {
+    nextPrisma.$disconnect().catch(() => {});
     prismaConnected = false;
     console.error("[DB] PostgreSQL connection failed:", error.message);
     return false;
@@ -143,9 +143,6 @@ function startDbHealthCheck() {
 
   console.log(`[DB] Health check started (interval: ${DB_HEALTH_CHECK_INTERVAL / 1000}s)`);
 }
-
-// Initialize Prisma connection
-prisma = createPrismaClient();
 
 const app = express();
 
@@ -1383,6 +1380,10 @@ async function initializeClient(accountId) {
 // Get all accounts
 app.get("/api/accounts", async (req, res) => {
   try {
+    if (!prismaConnected || !prisma) {
+      return res.status(503).json({ error: "Database is not connected" });
+    }
+
     const timeoutMs = parseInt(process.env.DB_QUERY_TIMEOUT_MS || "15000", 10);
     const accountsQuery = prisma.whatsAppAccount.findMany({
       orderBy: { createdAt: "desc" },

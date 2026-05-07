@@ -51,6 +51,10 @@ module.exports = function(io, dependencies) {
       }
 
       try {
+        if (!prisma) {
+          return callback({ success: false, error: 'Database is not connected' });
+        }
+
         logger.info('[Accounts NS] accounts:list loading accounts');
         const accounts = await withTimeout(
           prisma.whatsAppAccount.findMany({
