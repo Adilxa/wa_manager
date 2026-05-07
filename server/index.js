@@ -2216,9 +2216,15 @@ app.get("/health/websocket", (req, res) => {
 // ==================== SERVER LIFECYCLE ====================
 
 async function restoreConnectedClients() {
+  if (process.env.RESTORE_CONNECTED_CLIENTS !== "true") {
+    logger.info("Skipping connected account restore (RESTORE_CONNECTED_CLIENTS is not true)");
+    return;
+  }
+
   try {
     const connectedAccounts = await prisma.whatsAppAccount.findMany({
       where: { status: "CONNECTED" },
+      take: parseInt(process.env.RESTORE_CONNECTED_CLIENTS_LIMIT || "5", 10),
     });
 
     if (connectedAccounts.length === 0) {

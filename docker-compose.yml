@@ -153,6 +153,8 @@ services:
       API_MEMORY_LIMIT_MB: ${API_MEMORY_LIMIT_MB:-9216}
       NEXTJS_MAX_MEMORY_RESTART: ${NEXTJS_MAX_MEMORY_RESTART:-768M}
       NEXTJS_NODE_MAX_OLD_SPACE_SIZE: ${NEXTJS_NODE_MAX_OLD_SPACE_SIZE:-512}
+      RESTORE_CONNECTED_CLIENTS: ${RESTORE_CONNECTED_CLIENTS:-false}
+      RESTORE_CONNECTED_CLIENTS_LIMIT: ${RESTORE_CONNECTED_CLIENTS_LIMIT:-5}
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.wa-app.rule=Host(`ilovesanzhar.click`) || Host(`www.ilovesanzhar.click`)"
@@ -172,6 +174,7 @@ services:
     mem_limit: ${WA_MANAGER_MEMORY_LIMIT:-12g}
     volumes:
       - ./server/start-production.js:/app/server/start-production.js:ro
+      - ./server/index.js:/app/server/index.js:ro
       - baileys_auth:/app/.baileys_auth
       - wa_logs:/app/logs
     networks:
