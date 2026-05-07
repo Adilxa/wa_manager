@@ -27,7 +27,14 @@ module.exports = function(io, dependencies) {
     });
 
     // Get all accounts
-    socket.on('accounts:list', async (callback) => {
+    socket.on('accounts:list', async (...args) => {
+      const callback = args.find((arg) => typeof arg === 'function');
+
+      if (!callback) {
+        logger.warn('[Accounts NS] accounts:list called without callback');
+        return;
+      }
+
       try {
         const accounts = await prisma.whatsAppAccount.findMany({
           orderBy: { createdAt: 'desc' },

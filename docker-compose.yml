@@ -175,6 +175,7 @@ services:
     volumes:
       - ./server/start-production.js:/app/server/start-production.js:ro
       - ./server/index.js:/app/server/index.js:ro
+      - ./server/socket/namespaces/accounts.js:/app/server/socket/namespaces/accounts.js:ro
       - baileys_auth:/app/.baileys_auth
       - wa_logs:/app/logs
     networks:
