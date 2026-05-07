@@ -1,6 +1,7 @@
 const express = require("express");
 const cors = require("cors");
 const { createServer } = require("http");
+const net = require("net");
 const { PrismaClient } = require("@prisma/client");
 const QRCode = require("qrcode");
 const fs = require("fs");
@@ -2217,6 +2218,34 @@ app.get("/health", (req, res) => {
   });
 });
 
+app.get("/health/db-tcp", async (req, res) => {
+  const host = process.env.DB_TCP_HOST || "postgres";
+  const port = parseInt(process.env.DB_TCP_PORT || "5432", 10);
+  const timeoutMs = parseInt(process.env.DB_TCP_TIMEOUT_MS || "3000", 10);
+  const startedAt = Date.now();
+  let finished = false;
+
+  const socket = net.createConnection({ host, port });
+
+  const finish = (status, extra = {}) => {
+    if (finished) return;
+    finished = true;
+    socket.destroy();
+    res.status(status === "ok" ? 200 : 500).json({
+      status,
+      host,
+      port,
+      durationMs: Date.now() - startedAt,
+      ...extra,
+    });
+  };
+
+  socket.setTimeout(timeoutMs);
+  socket.once("connect", () => finish("ok"));
+  socket.once("timeout", () => finish("error", { error: `TCP connect timed out after ${timeoutMs}ms` }));
+  socket.once("error", (error) => finish("error", { error: error.message, code: error.code }));
+});
+
 // WebSocket health check
 app.get("/health/websocket", (req, res) => {
   if (!global.io) {
@@ -2391,7 +2420,11 @@ const server = httpServer.listen(PORT, async () => {
   logger.info(`WhatsApp API Server on port ${PORT}`);
   logger.info(`Max clients: ${CONFIG.MAX_CLIENTS}`);
   logger.info("[DB] Connecting to PostgreSQL...");
-  await connectPrisma();
+  const initialDbConnected = await connectPrisma();
+  if (!initialDbConnected) {
+    logger.error("[DB] Initial PostgreSQL connection failed; API will keep running and retry in background");
+    reconnectPrisma();
+  }
 
   // Initialize Socket.IO with all dependencies
   try {
