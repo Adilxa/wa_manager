@@ -13,6 +13,7 @@ module.exports = {
         NODE_ENV: "production",
         API_PORT: process.env.API_PORT || 5001,
         API_MEMORY_LIMIT_MB: process.env.API_MEMORY_LIMIT_MB || process.env.API_NODE_MAX_OLD_SPACE_SIZE || "9216",
+        START_QUEUE_WORKERS: process.env.START_QUEUE_WORKERS || "true",
         NODE_OPTIONS: `--expose-gc --max-old-space-size=${process.env.API_NODE_MAX_OLD_SPACE_SIZE || "9216"}`,
       },
       // Restart strategy

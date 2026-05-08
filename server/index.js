@@ -1713,6 +1713,11 @@ app.post("/api/messages/send", async (req, res) => {
     });
 
     const queueCounts = await messageQueue.getJobCounts();
+    const waitingCount = queueCounts.waiting || 0;
+    const prioritizedCount = queueCounts.prioritized || 0;
+    const delayedCount = queueCounts.delayed || 0;
+    const activeCount = queueCounts.active || 0;
+    const queuedCount = waitingCount + prioritizedCount + delayedCount;
 
     res.status(202).json({
       success: true,
@@ -1721,8 +1726,8 @@ app.post("/api/messages/send", async (req, res) => {
       contractId: tempContract.id,
       recipientId: recipient.id,
       jobId: job.id,
-      queuePosition: queueCounts.waiting + 1,
-      queueLength: queueCounts.waiting + queueCounts.active,
+      queuePosition: Math.max(1, queuedCount),
+      queueLength: queuedCount + activeCount,
       message: "Message queued for delivery",
     });
   } catch (error) {
@@ -2194,12 +2199,16 @@ app.get("/api/queues/status", async (req, res) => {
     res.json({
       contracts: {
         waiting: contractQueueCounts.waiting,
+        prioritized: contractQueueCounts.prioritized,
+        delayed: contractQueueCounts.delayed,
         active: contractQueueCounts.active,
         completed: contractQueueCounts.completed,
         failed: contractQueueCounts.failed,
       },
       messages: {
         waiting: messageQueueCounts.waiting,
+        prioritized: messageQueueCounts.prioritized,
+        delayed: messageQueueCounts.delayed,
         active: messageQueueCounts.active,
         completed: messageQueueCounts.completed,
         failed: messageQueueCounts.failed,
@@ -2222,6 +2231,7 @@ app.get("/health", (req, res) => {
     activeClients: clients.size,
     connectingClients: connectingAccounts.size,
     maxClients: CONFIG.MAX_CLIENTS,
+    queueWorkersEnabled: process.env.START_QUEUE_WORKERS === "true",
     memory: {
       heapUsedMB: Math.round(used.heapUsed / 1024 / 1024),
       heapTotalMB: Math.round(used.heapTotal / 1024 / 1024),
