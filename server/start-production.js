@@ -51,7 +51,7 @@ startProcess("api-server", "node", ["server/index.js"], {
   NODE_ENV: "production",
   API_PORT: process.env.API_PORT || "5001",
   RESTORE_CONNECTED_CLIENTS: process.env.RESTORE_CONNECTED_CLIENTS || "false",
-  START_QUEUE_WORKERS: process.env.START_QUEUE_WORKERS || "true",
+  START_QUEUE_WORKERS: process.env.DISABLE_QUEUE_WORKERS === "true" ? "false" : "true",
   API_MEMORY_LIMIT_MB:
     process.env.API_MEMORY_LIMIT_MB ||
     process.env.API_NODE_MAX_OLD_SPACE_SIZE ||
