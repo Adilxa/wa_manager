@@ -1,6 +1,7 @@
 const { Worker } = require("bullmq");
 const { PrismaClient } = require("@prisma/client");
 const { contractQueue, messageQueue, redisConnection } = require("./queue");
+const { isLidJid, jidUser, resolveSendRecipient } = require("./jid-resolver");
 
 // Single Prisma instance with optimized settings
 const prisma = new PrismaClient({
@@ -242,19 +243,19 @@ function startMessageWorker() {
           data: { status: "SENDING" },
         });
 
-        // Format JID for WhatsApp
-        // Support: @lid (group participants), @s.whatsapp.net (regular users), @g.us (groups)
-        let jid;
-        let cleanPhone = phoneNumber;
-        if (phoneNumber.includes("@lid") || phoneNumber.includes("@s.whatsapp.net") || phoneNumber.includes("@g.us")) {
-          // Already formatted - use as is
-          jid = phoneNumber;
-          // Extract number: remove @suffix and device id if present (e.g., "77001234567:123@s.whatsapp.net" -> "77001234567")
-          cleanPhone = phoneNumber.split("@")[0].split(":")[0];
-        } else {
-          // Clean phone number and format as regular user
-          cleanPhone = phoneNumber.replace(/[^0-9]/g, '');
-          jid = `${cleanPhone}@s.whatsapp.net`;
+        const destination = resolveSendRecipient(accountId, phoneNumber);
+        const jid = destination.deliveryJid;
+        const chatId = destination.chatId || jid;
+        const cleanPhone = destination.contactNumber || jidUser(chatId);
+
+        if (!jid) {
+          throw new Error("Invalid recipient JID");
+        }
+
+        if (destination.resolvedFromLid) {
+          logger.info(`🔁 Resolved ${destination.originalJid} -> ${jid}`);
+        } else if (isLidJid(jid)) {
+          logger.warn(`⚠️ Sending to unresolved LID ${jid}`);
         }
 
         logger.info(`📤 Sending to ${cleanPhone} (Contract: ${contractId})`);
@@ -266,7 +267,7 @@ function startMessageWorker() {
         const dbMessage = await prisma.message.create({
           data: {
             accountId,
-            chatId: jid,
+            chatId,
             direction: "OUTGOING",
             message: message,
             to: cleanPhone,

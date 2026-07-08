@@ -49,8 +49,8 @@ export default function ChatPage() {
 
   // WebSocket hooks
   const { accounts, loading } = useAccounts();
-  const { chats, sendMessage: sendMessageWS } = useChats(selectedAccount?.id || null);
-  const { messages } = useChatMessages(selectedAccount?.id || null, selectedChat?.chatId || null);
+  const { chats } = useChats(selectedAccount?.id || null);
+  const { messages, sendMessage: sendMessageWS } = useChatMessages(selectedAccount?.id || null, selectedChat?.chatId || null);
 
   // Filter connected accounts
   const connectedAccounts = accounts.filter((acc: Account) => acc.clientStatus === 'CONNECTED');
@@ -93,8 +93,7 @@ export default function ChatPage() {
 
     try {
       // Send via WebSocket
-      const contactNumber = selectedChat.contactNumber;
-      await sendMessageWS(contactNumber, newMessage.trim());
+      await sendMessageWS(newMessage.trim());
 
       // Clear input
       setNewMessage('');

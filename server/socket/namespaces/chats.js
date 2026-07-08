@@ -65,7 +65,7 @@ module.exports = function(io, dependencies) {
         const chatsMap = new Map();
 
         messages.forEach(msg => {
-          const key = msg.contactNumber || msg.to || msg.from || msg.chatId;
+          const key = msg.chatId || msg.contactNumber || msg.to || msg.from;
           if (!key) return;
 
           if (!chatsMap.has(key)) {
@@ -185,11 +185,12 @@ module.exports = function(io, dependencies) {
           }
         }
 
-        const contactNumber = decodedChatId.split('@')[0];
         const queue = messageQueues.get(accountId) || [];
         const queueLength = queue.length;
 
-        const messageId = enqueueMessage(accountId, contactNumber, message);
+        const messageId = enqueueMessage(accountId, decodedChatId, message, {
+          chatId: decodedChatId,
+        });
 
         if (queueLength === 0) {
           setTimeout(() => processMessageQueue(accountId), 100);

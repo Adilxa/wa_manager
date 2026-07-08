@@ -10,6 +10,15 @@ const pino = require("pino");
 const { contractQueue, messageQueue } = require("./queue");
 const { initializeWorkers } = require("./workers");
 const { initSocketIO } = require("./socket");
+const {
+  clearLidMappings,
+  isLidJid,
+  jidUser,
+  rememberContactLidMapping,
+  rememberLidMapping,
+  rememberMessageKeyLidMappings,
+  resolveSendRecipient,
+} = require("./jid-resolver");
 
 const {
   default: makeWASocket,
@@ -646,6 +655,7 @@ async function cleanupClient(accountId) {
   messageQueues.delete(accountId);
   rateLimiter.delete(accountId);
   messageCounters.delete(accountId);
+  clearLidMappings(accountId);
 }
 
 // ==================== RECONNECTION LOGIC ====================
@@ -900,9 +910,111 @@ function stopWatchdog() {
   }
 }
 
+// ==================== LID / PHONE NUMBER RESOLUTION ====================
+
+async function hydrateLidMappingsFromMessages(accountId) {
+  try {
+    if (!prismaConnected || !prisma) return;
+
+    const messages = await prisma.message.findMany({
+      where: {
+        accountId,
+        chatId: { contains: "@lid" },
+        contactNumber: { not: null },
+      },
+      select: {
+        chatId: true,
+        contactNumber: true,
+      },
+      orderBy: { sentAt: "desc" },
+      take: 5000,
+    });
+
+    let loaded = 0;
+    for (const msg of messages) {
+      if (!msg.chatId || !msg.contactNumber) continue;
+      if (msg.contactNumber === jidUser(msg.chatId)) continue;
+
+      const mapping = rememberLidMapping(accountId, msg.chatId, msg.contactNumber, "message-cache");
+      if (mapping?.changed) loaded++;
+    }
+
+    if (loaded > 0) {
+      logger.info(`Loaded ${loaded} LID mappings for ${accountId} from message cache`);
+    }
+  } catch (error) {
+    logger.warn(`Failed to hydrate LID mappings for ${accountId}: ${error.message}`);
+  }
+}
+
+async function persistLidMappingToMessages(accountId, mapping) {
+  if (!mapping?.changed || !prismaConnected || !prisma) return;
+
+  const contactNumber = jidUser(mapping.pnJid);
+
+  try {
+    const [incoming, outgoing] = await Promise.all([
+      prisma.message.updateMany({
+        where: {
+          accountId,
+          chatId: mapping.lidJid,
+          direction: "INCOMING",
+        },
+        data: {
+          contactNumber,
+          from: contactNumber,
+        },
+      }),
+      prisma.message.updateMany({
+        where: {
+          accountId,
+          chatId: mapping.lidJid,
+          direction: "OUTGOING",
+        },
+        data: {
+          contactNumber,
+          to: contactNumber,
+        },
+      }),
+    ]);
+
+    logger.info(
+      `Mapped ${mapping.lidJid} -> ${mapping.pnJid} for ${accountId} (${mapping.source}, updated ${incoming.count + outgoing.count} messages)`
+    );
+  } catch (error) {
+    logger.warn(`Failed to persist LID mapping ${mapping.lidJid}: ${error.message}`);
+  }
+}
+
+function cacheLidMapping(accountId, lid, pn, source) {
+  const mapping = rememberLidMapping(accountId, lid, pn, source);
+  if (mapping?.changed) {
+    persistLidMappingToMessages(accountId, mapping).catch(() => {});
+  }
+  return mapping;
+}
+
+function cacheContactLidMapping(accountId, contact, source) {
+  const mapping = rememberContactLidMapping(accountId, contact, source);
+  if (mapping?.changed) {
+    persistLidMappingToMessages(accountId, mapping).catch(() => {});
+  }
+  return mapping;
+}
+
+function cacheMessageKeyLidMappings(accountId, key, source) {
+  const mappings = rememberMessageKeyLidMappings(accountId, key, source);
+  for (const mapping of mappings) {
+    if (mapping.changed) {
+      persistLidMappingToMessages(accountId, mapping).catch(() => {});
+    }
+  }
+  return mappings;
+}
+
 // ==================== MESSAGE QUEUE SYSTEM ====================
 
-function enqueueMessage(accountId, to, message) {
+function enqueueMessage(accountId, to, message, metadata = {}) {
   if (!messageQueues.has(accountId)) {
     messageQueues.set(accountId, []);
   }
@@ -920,6 +1032,8 @@ function enqueueMessage(accountId, to, message) {
   queue.push({
     id: messageId,
     to,
+    chatId: metadata.chatId || null,
+    contactNumber: metadata.contactNumber || null,
     message,
     retries: 0,
     createdAt: Date.now(),
@@ -1015,32 +1129,28 @@ async function processMessageQueue(accountId) {
   const msg = queue[0];
 
   try {
-    // Support all JID formats: @s.whatsapp.net, @lid, @g.us
-    let jid = msg.to;
-    if (!msg.to.includes("@")) {
-      // Plain number - default to regular WhatsApp
-      jid = `${msg.to}@s.whatsapp.net`;
-    } else if (msg.to.includes("@lid")) {
-      // LID format - use as is
-      jid = msg.to;
-    } else if (msg.to.includes("@g.us")) {
-      // Group - use as is
-      jid = msg.to;
-    } else if (msg.to.includes("@s.whatsapp.net")) {
-      // Regular user - use as is
-      jid = msg.to;
+    const destination = resolveSendRecipient(accountId, msg.to);
+    const jid = destination.deliveryJid;
+    const chatId = msg.chatId || destination.chatId || jid;
+    const contactNumber = msg.contactNumber || destination.contactNumber || jidUser(chatId);
+
+    if (!jid) {
+      throw new Error("Invalid recipient JID");
+    }
+
+    if (destination.resolvedFromLid) {
+      logger.info(`Resolved ${destination.originalJid} -> ${jid} for ${accountId}`);
+    } else if (isLidJid(jid)) {
+      logger.warn(`Sending to unresolved LID ${jid} for ${accountId}`);
     }
 
     await sendMessageWithHumanBehavior(accountId, jid, msg.message);
-
-    // Extract contact number from JID (remove @suffix and device id)
-    const contactNumber = jid.split("@")[0].split(":")[0];
 
     // Save to database
     await prisma.message.create({
       data: {
         accountId,
-        chatId: jid,
+        chatId,
         direction: "OUTGOING",
         message: msg.message,
         to: contactNumber,
@@ -1078,14 +1188,19 @@ async function processMessageQueue(accountId) {
     msg.retries++;
 
     if (msg.retries >= CONFIG.MESSAGE_RETRY_COUNT) {
+      const destination = resolveSendRecipient(accountId, msg.to);
+      const chatId = msg.chatId || destination.chatId || msg.to;
+      const contactNumber = msg.contactNumber || destination.contactNumber || jidUser(chatId);
+
       await prisma.message.create({
         data: {
           accountId,
+          chatId,
           message: msg.message,
-          to: msg.to,
+          to: contactNumber,
           direction: "OUTGOING",
           status: "FAILED",
-          contactNumber: msg.to,
+          contactNumber,
         },
       });
 
@@ -1158,6 +1273,7 @@ async function initializeClient(accountId) {
     const { version } = await fetchLatestBaileysVersion();
 
     const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
+    await hydrateLidMappingsFromMessages(accountId);
 
     // Create socket with MINIMAL memory footprint
     const sock = makeWASocket({
@@ -1289,6 +1405,22 @@ async function initializeClient(accountId) {
     // Save credentials
     sock.ev.on("creds.update", saveCreds);
 
+    sock.ev.on("contacts.upsert", contacts => {
+      for (const contact of contacts || []) {
+        cacheContactLidMapping(accountId, contact, "contacts.upsert");
+      }
+    });
+
+    sock.ev.on("messaging-history.set", ({ contacts }) => {
+      for (const contact of contacts || []) {
+        cacheContactLidMapping(accountId, contact, "messaging-history.set");
+      }
+    });
+
+    sock.ev.on("chats.phoneNumberShare", ({ lid, jid }) => {
+      cacheLidMapping(accountId, lid, jid, "chats.phoneNumberShare");
+    });
+
     // Handle incoming messages - minimal processing
     sock.ev.on("messages.upsert", async ({ messages, type }) => {
       if (type !== "notify") return;
@@ -1307,6 +1439,7 @@ async function initializeClient(accountId) {
           const chatId = msg.key.remoteJid;
           const isFromMe = msg.key.fromMe;
           const isGroup = chatId.endsWith("@g.us");
+          cacheMessageKeyLidMappings(accountId, msg.key, "messages.upsert");
 
           // For groups, get the actual sender from participant
           // participant can be: "77001234567@s.whatsapp.net" or "77001234567:123@s.whatsapp.net" (with device id)
@@ -1316,7 +1449,7 @@ async function initializeClient(accountId) {
 
           if (isGroup && !isFromMe) {
             // Get participant (actual sender in group)
-            senderJid = msg.key.participant || msg.participant;
+            senderJid = msg.key.participantPn || msg.key.participant || msg.participant;
             if (senderJid) {
               // Extract number: remove @s.whatsapp.net or @lid, and device id if present
               senderNumber = senderJid.split("@")[0].split(":")[0];
@@ -1324,7 +1457,10 @@ async function initializeClient(accountId) {
           }
 
           // For direct chats or outgoing messages, use chatId
-          const contactNumber = senderNumber || chatId.split("@")[0];
+          const directContactNumber = !isGroup && !isFromMe && msg.key.senderPn
+            ? jidUser(msg.key.senderPn)
+            : null;
+          const contactNumber = senderNumber || directContactNumber || jidUser(chatId);
 
           const dbMessage = await prisma.message.create({
             data: {
@@ -1332,7 +1468,7 @@ async function initializeClient(accountId) {
               chatId,
               direction: isFromMe ? "OUTGOING" : "INCOMING",
               message: messageText,
-              to: isFromMe ? chatId.split("@")[0] : null,
+              to: isFromMe ? contactNumber : null,
               from: isFromMe ? null : contactNumber,
               status: isFromMe ? "SENT" : "RECEIVED",
               contactNumber,
@@ -1765,7 +1901,7 @@ app.get("/api/accounts/:id/chats", async (req, res) => {
     const chatsMap = new Map();
 
     messages.forEach(msg => {
-      const key = msg.contactNumber || msg.to || msg.from || msg.chatId;
+      const key = msg.chatId || msg.contactNumber || msg.to || msg.from;
       if (!key) return;
 
       if (!chatsMap.has(key)) {
@@ -1879,11 +2015,12 @@ app.post("/api/accounts/:accountId/chats/:chatId", async (req, res) => {
       }
     }
 
-    const contactNumber = decodedChatId.split("@")[0];
     const queue = messageQueues.get(accountId) || [];
     const queueLength = queue.length;
 
-    const messageId = enqueueMessage(accountId, contactNumber, message);
+    const messageId = enqueueMessage(accountId, decodedChatId, message, {
+      chatId: decodedChatId,
+    });
 
     if (queueLength === 0) {
       setTimeout(() => processMessageQueue(accountId), 100);
