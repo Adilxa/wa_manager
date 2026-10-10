@@ -30,7 +30,7 @@ interface Account {
 interface Chat {
   chatId: string;
   contactNumber: string;
-  contactName: string;
+  contactName: string | null;
   lastMessage: string;
   lastMessageTime: string;
   unreadCount: number;
@@ -135,14 +135,14 @@ export default function ChatPage() {
 
   const filteredChats = chats.filter(
     (chat) =>
-      chat.contactName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      chat.contactNumber.includes(searchQuery)
+      (chat.contactName || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (chat.contactNumber || '').includes(searchQuery)
   );
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-black flex items-center justify-center">
-        <div className="flex items-center gap-3 text-white">
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="flex items-center gap-3 text-gray-900">
           <Loader2 className="w-6 h-6 animate-spin" />
           <span className="text-lg">Loading...</span>
         </div>
@@ -152,14 +152,14 @@ export default function ChatPage() {
 
   if (connectedAccounts.length === 0 && !loading) {
     return (
-      <div className="min-h-screen bg-black flex items-center justify-center">
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
         <div className="text-center">
-          <MessageCircle className="w-16 h-16 text-gray-600 mx-auto mb-4" />
-          <h2 className="text-2xl font-bold text-white mb-2">No Connected Accounts</h2>
-          <p className="text-gray-400 mb-6">Connect a WhatsApp account to start chatting</p>
+          <MessageCircle className="w-16 h-16 text-gray-400 mx-auto mb-4" />
+          <h2 className="text-2xl font-bold text-gray-900 mb-2">No Connected Accounts</h2>
+          <p className="text-gray-600 mb-6">Connect a WhatsApp account to start chatting</p>
           <button
             onClick={() => router.push('/')}
-            className="px-6 py-3 bg-white text-black rounded-lg font-medium hover:bg-gray-200 transition"
+            className="px-6 py-3 bg-green-600 text-white rounded-lg font-medium hover:bg-green-700 transition"
           >
             Go to Dashboard
           </button>
@@ -169,21 +169,21 @@ export default function ChatPage() {
   }
 
   return (
-    <div className="h-screen bg-black flex overflow-hidden">
+    <div className="h-screen bg-gray-50 flex overflow-hidden">
       {/* Sidebar - Список чатов */}
-      <div className="w-[400px] bg-gray-900 border-r border-gray-800 flex flex-col">
+      <div className="w-[400px] bg-white border-r border-gray-200 flex flex-col">
         {/* Header */}
-        <div className="bg-gray-800 border-b border-gray-700 p-4">
+        <div className="bg-gray-100 border-b border-gray-300 p-4">
           <div className="flex items-center justify-between mb-3">
             <button
               onClick={() => router.push('/')}
-              className="p-2 hover:bg-gray-700 rounded-lg transition"
+              className="p-2 hover:bg-gray-200 rounded-lg transition"
             >
-              <ArrowLeft className="w-5 h-5 text-white" />
+              <ArrowLeft className="w-5 h-5 text-gray-900" />
             </button>
-            <h2 className="text-lg font-semibold text-white">Chats</h2>
-            <button className="p-2 hover:bg-gray-700 rounded-lg transition">
-              <MoreVertical className="w-5 h-5 text-white" />
+            <h2 className="text-lg font-semibold text-gray-900">Chats</h2>
+            <button className="p-2 hover:bg-gray-200 rounded-lg transition">
+              <MoreVertical className="w-5 h-5 text-gray-900" />
             </button>
           </div>
 
@@ -196,7 +196,7 @@ export default function ChatPage() {
                 setSelectedAccount(acc || null);
                 setSelectedChat(null);
               }}
-              className="w-full mb-3 px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
+              className="w-full mb-3 px-3 py-2 bg-gray-200 border border-gray-300 rounded-lg text-gray-900 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
             >
               {connectedAccounts.map((acc) => (
                 <option key={acc.id} value={acc.id}>
@@ -214,7 +214,7 @@ export default function ChatPage() {
               placeholder="Search chats..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full pl-10 pr-4 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white text-sm placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-green-500"
+              className="w-full pl-10 pr-4 py-2 bg-gray-200 border border-gray-300 rounded-lg text-gray-900 text-sm placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-green-500"
             />
           </div>
         </div>
@@ -232,29 +232,29 @@ export default function ChatPage() {
               <div
                 key={chat.chatId}
                 onClick={() => setSelectedChat(chat)}
-                className={`flex items-center gap-3 p-4 cursor-pointer border-b border-gray-800 transition hover:bg-gray-800 ${
-                  selectedChat?.chatId === chat.chatId ? 'bg-gray-800' : ''
+                className={`flex items-center gap-3 p-4 cursor-pointer border-b border-gray-200 transition hover:bg-gray-100 ${
+                  selectedChat?.chatId === chat.chatId ? 'bg-gray-100' : ''
                 }`}
               >
                 {/* Avatar */}
-                <div className="w-12 h-12 bg-gray-700 rounded-full flex items-center justify-center flex-shrink-0">
-                  <User className="w-6 h-6 text-gray-400" />
+                <div className="w-12 h-12 bg-gray-200 rounded-full flex items-center justify-center flex-shrink-0">
+                  <User className="w-6 h-6 text-gray-600" />
                 </div>
 
                 {/* Info */}
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center justify-between mb-1">
-                    <h3 className="font-semibold text-white truncate">
-                      {chat.contactName}
+                    <h3 className="font-semibold text-gray-900 truncate">
+                      {chat.contactName || chat.contactNumber}
                     </h3>
                     <span className="text-xs text-gray-500 flex-shrink-0">
                       {formatTime(chat.lastMessageTime)}
                     </span>
                   </div>
                   <div className="flex items-center justify-between">
-                    <p className="text-sm text-gray-400 truncate">
+                    <p className="text-sm text-gray-600 truncate">
                       {chat.direction === 'OUTGOING' && (
-                        <CheckCheck className="w-3 h-3 inline mr-1 text-blue-400" />
+                        <CheckCheck className="w-3 h-3 inline mr-1 text-blue-600" />
                       )}
                       {chat.lastMessage}
                     </p>
@@ -274,13 +274,13 @@ export default function ChatPage() {
       {/* Main Chat Area */}
       <div className="flex-1 flex flex-col">
         {!selectedChat ? (
-          <div className="flex-1 flex items-center justify-center bg-gray-900">
+          <div className="flex-1 flex items-center justify-center bg-white">
             <div className="text-center">
-              <MessageCircle className="w-20 h-20 text-gray-700 mx-auto mb-4" />
-              <h2 className="text-2xl font-bold text-white mb-2">
+              <MessageCircle className="w-20 h-20 text-gray-300 mx-auto mb-4" />
+              <h2 className="text-2xl font-bold text-gray-900 mb-2">
                 WhatsApp Clone
               </h2>
-              <p className="text-gray-400">
+              <p className="text-gray-600">
                 Select a chat to start messaging
               </p>
             </div>
@@ -288,36 +288,36 @@ export default function ChatPage() {
         ) : (
           <>
             {/* Chat Header */}
-            <div className="bg-gray-800 border-b border-gray-700 p-4 flex items-center justify-between">
+            <div className="bg-gray-100 border-b border-gray-300 p-4 flex items-center justify-between">
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 bg-gray-700 rounded-full flex items-center justify-center">
-                  <User className="w-5 h-5 text-gray-400" />
+                <div className="w-10 h-10 bg-gray-200 rounded-full flex items-center justify-center">
+                  <User className="w-5 h-5 text-gray-600" />
                 </div>
                 <div>
-                  <h3 className="font-semibold text-white">
-                    {selectedChat.contactName}
+                  <h3 className="font-semibold text-gray-900">
+                    {selectedChat.contactName || selectedChat.contactNumber}
                   </h3>
-                  <p className="text-xs text-gray-400">
+                  <p className="text-xs text-gray-600">
                     {selectedChat.contactNumber}
                   </p>
                 </div>
               </div>
               <div className="flex items-center gap-2">
-                <button className="p-2 hover:bg-gray-700 rounded-lg transition">
-                  <Video className="w-5 h-5 text-white" />
+                <button className="p-2 hover:bg-gray-200 rounded-lg transition">
+                  <Video className="w-5 h-5 text-gray-900" />
                 </button>
-                <button className="p-2 hover:bg-gray-700 rounded-lg transition">
-                  <Phone className="w-5 h-5 text-white" />
+                <button className="p-2 hover:bg-gray-200 rounded-lg transition">
+                  <Phone className="w-5 h-5 text-gray-900" />
                 </button>
-                <button className="p-2 hover:bg-gray-700 rounded-lg transition">
-                  <MoreVertical className="w-5 h-5 text-white" />
+                <button className="p-2 hover:bg-gray-200 rounded-lg transition">
+                  <MoreVertical className="w-5 h-5 text-gray-900" />
                 </button>
               </div>
             </div>
 
             {/* Messages */}
             <div
-              className="flex-1 overflow-y-auto p-4 bg-gray-900"
+              className="flex-1 overflow-y-auto p-4 bg-white"
               style={{
                 backgroundImage:
                   'repeating-linear-gradient(45deg, transparent, transparent 10px, rgba(255,255,255,.02) 10px, rgba(255,255,255,.02) 20px)',
@@ -340,7 +340,7 @@ export default function ChatPage() {
                       <div key={msg.id}>
                         {showDate && (
                           <div className="flex justify-center my-4">
-                            <span className="bg-gray-800 text-gray-400 text-xs px-3 py-1 rounded-lg">
+                            <span className="bg-gray-100 text-gray-600 text-xs px-3 py-1 rounded-lg">
                               {formatDate(msg.sentAt)}
                             </span>
                           </div>
@@ -354,13 +354,13 @@ export default function ChatPage() {
                             className={`max-w-[70%] rounded-lg p-3 ${
                               isOutgoing
                                 ? 'bg-green-600 text-white'
-                                : 'bg-gray-800 text-white'
+                                : 'bg-gray-100 text-gray-900'
                             }`}
                           >
                             <p className="text-sm break-words">{msg.message}</p>
                             <div
                               className={`flex items-center justify-end gap-1 mt-1 ${
-                                isOutgoing ? 'text-gray-200' : 'text-gray-500'
+                                isOutgoing ? 'text-gray-800' : 'text-gray-500'
                               }`}
                             >
                               <span className="text-xs">
@@ -375,7 +375,7 @@ export default function ChatPage() {
                                     <CheckCheck className="w-3 h-3" />
                                   )}
                                   {msg.status === 'READ' && (
-                                    <CheckCheck className="w-3 h-3 text-blue-400" />
+                                    <CheckCheck className="w-3 h-3 text-blue-600" />
                                   )}
                                 </>
                               )}
@@ -391,19 +391,19 @@ export default function ChatPage() {
             </div>
 
             {/* Message Input */}
-            <div className="bg-gray-800 border-t border-gray-700 p-4">
+            <div className="bg-gray-100 border-t border-gray-300 p-4">
               <form onSubmit={sendMessage} className="flex items-center gap-3">
                 <button
                   type="button"
-                  className="p-2 hover:bg-gray-700 rounded-lg transition"
+                  className="p-2 hover:bg-gray-200 rounded-lg transition"
                 >
-                  <Smile className="w-6 h-6 text-gray-400" />
+                  <Smile className="w-6 h-6 text-gray-600" />
                 </button>
                 <button
                   type="button"
-                  className="p-2 hover:bg-gray-700 rounded-lg transition"
+                  className="p-2 hover:bg-gray-200 rounded-lg transition"
                 >
-                  <Paperclip className="w-6 h-6 text-gray-400" />
+                  <Paperclip className="w-6 h-6 text-gray-600" />
                 </button>
                 <input
                   type="text"
@@ -411,12 +411,12 @@ export default function ChatPage() {
                   onChange={(e) => setNewMessage(e.target.value)}
                   placeholder="Type a message"
                   disabled={sending}
-                  className="flex-1 px-4 py-3 bg-gray-700 border border-gray-600 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-green-500 disabled:opacity-50"
+                  className="flex-1 px-4 py-3 bg-gray-200 border border-gray-300 rounded-lg text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-green-500 disabled:opacity-50"
                 />
                 <button
                   type="submit"
                   disabled={!newMessage.trim() || sending}
-                  className="p-3 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:bg-gray-700 disabled:text-gray-500 disabled:cursor-not-allowed transition"
+                  className="p-3 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:bg-gray-200 disabled:text-gray-400 disabled:cursor-not-allowed transition"
                 >
                   {sending ? (
                     <Loader2 className="w-6 h-6 animate-spin" />

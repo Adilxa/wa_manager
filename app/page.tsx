@@ -211,16 +211,16 @@ export default function Dashboard() {
   const getStatusConfig = (status: string) => {
     switch (status) {
       case 'CONNECTED':
-        return { color: 'text-green-400', bg: 'bg-green-500/10', border: 'border-green-500/30', icon: CheckCircle2, label: 'Connected', pulse: false };
+        return { color: 'text-green-600', bg: 'bg-green-500/10', border: 'border-green-500/30', icon: CheckCircle2, label: 'Connected', pulse: false };
       case 'QR_READY':
-        return { color: 'text-amber-400', bg: 'bg-amber-500/10', border: 'border-amber-500/30', icon: QrCode, label: 'Scan QR', pulse: true };
+        return { color: 'text-amber-600', bg: 'bg-amber-500/10', border: 'border-amber-500/30', icon: QrCode, label: 'Scan QR', pulse: true };
       case 'CONNECTING':
       case 'AUTHENTICATING':
-        return { color: 'text-blue-400', bg: 'bg-blue-500/10', border: 'border-blue-500/30', icon: Loader2, label: 'Connecting...', pulse: true };
+        return { color: 'text-blue-600', bg: 'bg-blue-500/10', border: 'border-blue-500/30', icon: Loader2, label: 'Connecting...', pulse: true };
       case 'FAILED':
-        return { color: 'text-red-400', bg: 'bg-red-500/10', border: 'border-red-500/30', icon: AlertCircle, label: 'Failed', pulse: false };
+        return { color: 'text-red-600', bg: 'bg-red-500/10', border: 'border-red-500/30', icon: AlertCircle, label: 'Failed', pulse: false };
       default:
-        return { color: 'text-gray-400', bg: 'bg-gray-500/10', border: 'border-gray-500/30', icon: Clock, label: 'Offline', pulse: false };
+        return { color: 'text-gray-600', bg: 'bg-gray-500/10', border: 'border-gray-500/30', icon: Clock, label: 'Offline', pulse: false };
     }
   };
 
@@ -239,26 +239,26 @@ export default function Dashboard() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-black flex items-center justify-center">
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
         <div className="flex flex-col items-center gap-4">
           <div className="relative">
             <div className="w-16 h-16 border-4 border-green-500/20 rounded-full"></div>
             <div className="absolute inset-0 w-16 h-16 border-4 border-transparent border-t-green-500 rounded-full animate-spin"></div>
           </div>
-          <p className="text-gray-400 text-sm">Loading accounts...</p>
+          <p className="text-gray-600 text-sm">Loading accounts...</p>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-black text-white">
+    <div className="min-h-screen bg-gray-50 text-gray-900">
       {/* Toast Notification */}
       {toast && (
         <div className={`fixed top-4 right-4 z-50 px-4 py-3 rounded-xl flex items-center gap-3 shadow-2xl animate-float
-          ${toast.type === 'success' ? 'bg-green-500/20 border border-green-500/30 text-green-400' :
-            toast.type === 'error' ? 'bg-red-500/20 border border-red-500/30 text-red-400' :
-            'bg-blue-500/20 border border-blue-500/30 text-blue-400'}`}>
+          ${toast.type === 'success' ? 'bg-green-500/20 border border-green-500/30 text-green-600' :
+            toast.type === 'error' ? 'bg-red-500/20 border border-red-500/30 text-red-600' :
+            'bg-blue-500/20 border border-blue-500/30 text-blue-600'}`}>
           {toast.type === 'success' && <CheckCircle2 className="w-5 h-5" />}
           {toast.type === 'error' && <AlertCircle className="w-5 h-5" />}
           {toast.type === 'info' && <Activity className="w-5 h-5" />}
@@ -287,13 +287,13 @@ export default function Dashboard() {
                 setRefreshing(false);
               }}
               disabled={refreshing}
-              className="p-2.5 rounded-xl bg-gray-900 border border-gray-800 text-gray-400 hover:text-white hover:border-gray-700 transition disabled:opacity-50"
+              className="p-2.5 rounded-xl bg-white border border-gray-200 text-gray-600 hover:text-gray-900 hover:border-gray-300 transition disabled:opacity-50"
             >
               <RefreshCw className={`w-5 h-5 ${refreshing ? 'animate-spin' : ''}`} />
             </button>
             <button
               onClick={handleLogout}
-              className="flex items-center gap-2 px-4 py-2.5 bg-gray-900 border border-gray-800 rounded-xl text-gray-400 hover:text-white hover:border-gray-700 transition"
+              className="flex items-center gap-2 px-4 py-2.5 bg-white border border-gray-200 rounded-xl text-gray-600 hover:text-gray-900 hover:border-gray-300 transition"
             >
               <LogOut className="w-4 h-4" />
               <span className="hidden sm:inline">Logout</span>
@@ -303,50 +303,50 @@ export default function Dashboard() {
 
         {/* Stats Grid */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-8">
-          <div className="stat-card bg-gray-900/50 border border-gray-800/50 text-gray-400">
+          <div className="stat-card bg-white border border-gray-200 text-gray-600">
             <div className="flex items-center gap-3">
-              <div className="p-2 rounded-lg bg-gray-800">
+              <div className="p-2 rounded-lg bg-gray-100">
                 <Smartphone className="w-5 h-5" />
               </div>
               <div>
-                <p className="text-2xl font-bold text-white">{stats.total}</p>
+                <p className="text-2xl font-bold text-gray-900">{stats.total}</p>
                 <p className="text-xs text-gray-500">Total Accounts</p>
               </div>
             </div>
           </div>
 
-          <div className="stat-card bg-green-500/5 border border-green-500/20 text-green-400">
+          <div className="stat-card bg-green-500/5 border border-green-500/20 text-green-600">
             <div className="flex items-center gap-3">
               <div className="p-2 rounded-lg bg-green-500/10">
                 <Wifi className="w-5 h-5" />
               </div>
               <div>
-                <p className="text-2xl font-bold text-green-400">{stats.connected}</p>
-                <p className="text-xs text-green-400/60">Connected</p>
+                <p className="text-2xl font-bold text-green-600">{stats.connected}</p>
+                <p className="text-xs text-green-700/70">Connected</p>
               </div>
             </div>
           </div>
 
-          <div className="stat-card bg-amber-500/5 border border-amber-500/20 text-amber-400">
+          <div className="stat-card bg-amber-500/5 border border-amber-500/20 text-amber-600">
             <div className="flex items-center gap-3">
               <div className="p-2 rounded-lg bg-amber-500/10">
                 <Shield className="w-5 h-5" />
               </div>
               <div>
-                <p className="text-2xl font-bold text-amber-400">{stats.withLimits}</p>
-                <p className="text-xs text-amber-400/60">With Limits</p>
+                <p className="text-2xl font-bold text-amber-600">{stats.withLimits}</p>
+                <p className="text-xs text-amber-700/70">With Limits</p>
               </div>
             </div>
           </div>
 
-          <div className="stat-card bg-blue-500/5 border border-blue-500/20 text-blue-400">
+          <div className="stat-card bg-blue-500/5 border border-blue-500/20 text-blue-600">
             <div className="flex items-center gap-3">
               <div className="p-2 rounded-lg bg-blue-500/10">
                 <Activity className="w-5 h-5" />
               </div>
               <div>
-                <p className="text-2xl font-bold text-blue-400">{stats.pending}</p>
-                <p className="text-xs text-blue-400/60">Pending</p>
+                <p className="text-2xl font-bold text-blue-600">{stats.pending}</p>
+                <p className="text-xs text-blue-700/70">Pending</p>
               </div>
             </div>
           </div>
@@ -359,9 +359,9 @@ export default function Dashboard() {
             {!showCreateForm ? (
               <button
                 onClick={() => setShowCreateForm(true)}
-                className="w-full p-4 rounded-xl border-2 border-dashed border-gray-800 hover:border-green-500/50 hover:bg-green-500/5 transition-all duration-300 flex items-center justify-center gap-3 text-gray-400 hover:text-green-400 group"
+                className="w-full p-4 rounded-xl border-2 border-dashed border-gray-200 hover:border-green-500/50 hover:bg-green-500/5 transition-all duration-300 flex items-center justify-center gap-3 text-gray-600 hover:text-green-600 group"
               >
-                <div className="p-2 rounded-lg bg-gray-900 group-hover:bg-green-500/10 transition">
+                <div className="p-2 rounded-lg bg-white group-hover:bg-green-500/10 transition">
                   <Plus className="w-5 h-5" />
                 </div>
                 <span className="font-medium">Add New Account</span>
@@ -370,12 +370,12 @@ export default function Dashboard() {
               <div className="glass rounded-xl p-5 space-y-4">
                 <div className="flex items-center justify-between">
                   <h3 className="font-semibold flex items-center gap-2">
-                    <Plus className="w-5 h-5 text-green-400" />
+                    <Plus className="w-5 h-5 text-green-600" />
                     Create New Account
                   </h3>
                   <button
                     onClick={() => setShowCreateForm(false)}
-                    className="p-1.5 rounded-lg hover:bg-gray-800 text-gray-400 hover:text-white transition"
+                    className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-600 hover:text-gray-900 transition"
                   >
                     <X className="w-4 h-4" />
                   </button>
@@ -387,7 +387,7 @@ export default function Dashboard() {
                     onChange={(e) => setNewAccountName(e.target.value)}
                     onKeyDown={(e) => e.key === 'Enter' && createAccount()}
                     placeholder="Account name..."
-                    className="flex-1 px-4 py-3 bg-black/50 border border-gray-800 rounded-xl text-white placeholder-gray-600 focus:outline-none focus:border-green-500/50 transition"
+                    className="flex-1 px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl text-gray-900 placeholder-gray-400 focus:outline-none focus:border-green-500/50 transition"
                     autoFocus
                   />
                   <button
@@ -398,12 +398,12 @@ export default function Dashboard() {
                     Create
                   </button>
                 </div>
-                <label className="flex items-center gap-2 text-sm text-gray-400 cursor-pointer">
+                <label className="flex items-center gap-2 text-sm text-gray-600 cursor-pointer">
                   <input
                     type="checkbox"
                     checked={useLimits}
                     onChange={(e) => setUseLimits(e.target.checked)}
-                    className="w-4 h-4 rounded border-gray-600 bg-gray-800 text-green-500 focus:ring-green-500/20"
+                    className="w-4 h-4 rounded border-gray-300 bg-gray-100 text-green-500 focus:ring-green-500/20"
                   />
                   <Shield className="w-3.5 h-3.5" />
                   Use rate limits (recommended)
@@ -414,8 +414,8 @@ export default function Dashboard() {
             {/* Accounts */}
             {accounts.length === 0 ? (
               <div className="glass rounded-xl p-12 text-center">
-                <div className="w-20 h-20 rounded-2xl bg-gray-800/50 flex items-center justify-center mx-auto mb-4">
-                  <Smartphone className="w-10 h-10 text-gray-600" />
+                <div className="w-20 h-20 rounded-2xl bg-gray-50 flex items-center justify-center mx-auto mb-4">
+                  <Smartphone className="w-10 h-10 text-gray-400" />
                 </div>
                 <h3 className="text-lg font-medium mb-2">No accounts yet</h3>
                 <p className="text-gray-500 text-sm">Create your first WhatsApp account to get started</p>
@@ -432,15 +432,15 @@ export default function Dashboard() {
                       key={account.id}
                       onClick={() => setSelectedAccount(account)}
                       className={`group glass rounded-xl p-4 cursor-pointer transition-all duration-300
-                        ${isSelected ? 'border-green-500/50 bg-green-500/5 glow-green' : 'hover:border-gray-700'}`}
+                        ${isSelected ? 'border-green-500/50 bg-green-500/5 glow-green' : 'hover:border-gray-300'}`}
                     >
                       <div className="flex items-center gap-4">
                         {/* Avatar */}
                         <div className={`relative w-12 h-12 rounded-xl flex items-center justify-center font-bold text-lg
-                          ${account.clientStatus === 'CONNECTED' ? 'bg-green-500/10 text-green-400' : 'bg-gray-800 text-gray-400'}`}>
+                          ${account.clientStatus === 'CONNECTED' ? 'bg-green-500/10 text-green-600' : 'bg-gray-100 text-gray-600'}`}>
                           {account.name.charAt(0).toUpperCase()}
                           {account.clientStatus === 'CONNECTED' && (
-                            <div className="absolute -bottom-1 -right-1 w-4 h-4 bg-green-500 rounded-full border-2 border-black"></div>
+                            <div className="absolute -bottom-1 -right-1 w-4 h-4 bg-green-500 rounded-full border-2 border-white"></div>
                           )}
                         </div>
 
@@ -449,7 +449,7 @@ export default function Dashboard() {
                           <div className="flex items-center gap-2">
                             <h3 className="font-semibold truncate">{account.name}</h3>
                             {account.useLimits && (
-                              <Shield className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                              <Shield className="w-3.5 h-3.5 text-amber-600 shrink-0" />
                             )}
                           </div>
                           <p className="text-sm text-gray-500 truncate">
@@ -465,11 +465,11 @@ export default function Dashboard() {
                       </div>
 
                       {/* Actions */}
-                      <div className="flex gap-2 mt-4 pt-3 border-t border-gray-800/50">
+                      <div className="flex gap-2 mt-4 pt-3 border-t border-gray-200">
                         {account.clientStatus === 'DISCONNECTED' && (
                           <button
                             onClick={(e) => { e.stopPropagation(); connectAccount(account.id); }}
-                            className="flex-1 py-2 rounded-lg bg-green-500/10 text-green-400 text-sm font-medium hover:bg-green-500/20 transition flex items-center justify-center gap-2"
+                            className="flex-1 py-2 rounded-lg bg-green-500/10 text-green-600 text-sm font-medium hover:bg-green-500/20 transition flex items-center justify-center gap-2"
                           >
                             <Link className="w-3.5 h-3.5" />
                             Connect
@@ -479,7 +479,7 @@ export default function Dashboard() {
                         {account.hasActiveClient && account.clientStatus !== 'DISCONNECTED' && (
                           <button
                             onClick={(e) => { e.stopPropagation(); disconnectAccount(account.id); }}
-                            className="flex-1 py-2 rounded-lg bg-amber-500/10 text-amber-400 text-sm font-medium hover:bg-amber-500/20 transition flex items-center justify-center gap-2"
+                            className="flex-1 py-2 rounded-lg bg-amber-500/10 text-amber-600 text-sm font-medium hover:bg-amber-500/20 transition flex items-center justify-center gap-2"
                           >
                             <WifiOff className="w-3.5 h-3.5" />
                             Disconnect
@@ -488,7 +488,7 @@ export default function Dashboard() {
 
                         <button
                           onClick={(e) => { e.stopPropagation(); copyQRLink(account.id); }}
-                          className="p-2 rounded-lg bg-gray-800 text-gray-400 hover:text-white hover:bg-gray-700 transition"
+                          className="p-2 rounded-lg bg-gray-100 text-gray-600 hover:text-gray-900 hover:bg-gray-200 transition"
                           title="Copy QR Link"
                         >
                           <Copy className="w-4 h-4" />
@@ -496,7 +496,7 @@ export default function Dashboard() {
 
                         <button
                           onClick={(e) => { e.stopPropagation(); deleteAccount(account.id); }}
-                          className="p-2 rounded-lg bg-gray-800 text-gray-400 hover:text-red-400 hover:bg-red-500/10 transition"
+                          className="p-2 rounded-lg bg-gray-100 text-gray-600 hover:text-red-600 hover:bg-red-500/10 transition"
                         >
                           <Trash2 className="w-4 h-4" />
                         </button>
@@ -513,8 +513,8 @@ export default function Dashboard() {
             <div className="glass rounded-xl p-5 sticky top-6">
               {!selectedAccount ? (
                 <div className="text-center py-16">
-                  <div className="w-20 h-20 rounded-2xl bg-gray-800/50 flex items-center justify-center mx-auto mb-4">
-                    <Smartphone className="w-10 h-10 text-gray-600" />
+                  <div className="w-20 h-20 rounded-2xl bg-gray-50 flex items-center justify-center mx-auto mb-4">
+                    <Smartphone className="w-10 h-10 text-gray-400" />
                   </div>
                   <h3 className="text-lg font-medium mb-2">No Account Selected</h3>
                   <p className="text-gray-500 text-sm">Select an account to view details</p>
@@ -525,7 +525,7 @@ export default function Dashboard() {
                   <div className="flex items-start justify-between">
                     <div className="flex items-center gap-3">
                       <div className={`w-14 h-14 rounded-xl flex items-center justify-center font-bold text-xl
-                        ${selectedAccount.clientStatus === 'CONNECTED' ? 'bg-green-500/10 text-green-400' : 'bg-gray-800 text-gray-400'}`}>
+                        ${selectedAccount.clientStatus === 'CONNECTED' ? 'bg-green-500/10 text-green-600' : 'bg-gray-100 text-gray-600'}`}>
                         {selectedAccount.name.charAt(0).toUpperCase()}
                       </div>
                       <div>
@@ -535,7 +535,7 @@ export default function Dashboard() {
                     </div>
                     <button
                       onClick={() => setSelectedAccount(null)}
-                      className="p-2 rounded-lg hover:bg-gray-800 text-gray-400 hover:text-white transition"
+                      className="p-2 rounded-lg hover:bg-gray-100 text-gray-600 hover:text-gray-900 transition"
                     >
                       <X className="w-4 h-4" />
                     </button>
@@ -557,9 +557,9 @@ export default function Dashboard() {
                   })()}
 
                   {/* Rate Limits Toggle */}
-                  <div className="flex items-center justify-between p-3 rounded-xl bg-gray-800/30 border border-gray-800">
+                  <div className="flex items-center justify-between p-3 rounded-xl bg-gray-50 border border-gray-200">
                     <div className="flex items-center gap-3">
-                      <Shield className={`w-5 h-5 ${selectedAccount.useLimits ? 'text-amber-400' : 'text-gray-500'}`} />
+                      <Shield className={`w-5 h-5 ${selectedAccount.useLimits ? 'text-amber-600' : 'text-gray-500'}`} />
                       <div>
                         <p className="font-medium">Rate Limits</p>
                         <p className="text-xs text-gray-500">
@@ -569,7 +569,7 @@ export default function Dashboard() {
                     </div>
                     <button
                       onClick={() => toggleUseLimits(selectedAccount.id, selectedAccount.useLimits)}
-                      className={`relative w-12 h-7 rounded-full transition-colors ${selectedAccount.useLimits ? 'bg-amber-500' : 'bg-gray-700'}`}
+                      className={`relative w-12 h-7 rounded-full transition-colors ${selectedAccount.useLimits ? 'bg-amber-500' : 'bg-gray-200'}`}
                     >
                       <span className={`absolute top-1 w-5 h-5 bg-white rounded-full transition-transform ${selectedAccount.useLimits ? 'left-6' : 'left-1'}`} />
                     </button>
@@ -577,16 +577,16 @@ export default function Dashboard() {
 
                   {/* QR Code - Real-time via WebSocket */}
                   {(realtimeQRCode || selectedAccount.qrCode) && (
-                    <div className="bg-black/50 rounded-xl p-4 text-center border border-gray-800">
+                    <div className="bg-gray-50 rounded-xl p-4 text-center border border-gray-200">
                       <div className="flex items-center justify-between mb-4">
                         <h4 className="font-semibold flex items-center gap-2 text-sm">
-                          <QrCode className="w-4 h-4 text-amber-400" />
+                          <QrCode className="w-4 h-4 text-amber-600" />
                           Scan to Connect
                         </h4>
                         <button
                           onClick={() => regenerateQR(selectedAccount.id)}
                           disabled={regeneratingQR}
-                          className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-800 rounded-lg text-xs text-gray-400 hover:text-white transition disabled:opacity-50"
+                          className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-100 rounded-lg text-xs text-gray-600 hover:text-gray-900 transition disabled:opacity-50"
                         >
                           <RefreshCw className={`w-3 h-3 ${regeneratingQR ? 'animate-spin' : ''}`} />
                           Refresh
@@ -605,7 +605,7 @@ export default function Dashboard() {
                   {selectedAccount.clientStatus === 'CONNECTED' && (
                     <div className="space-y-3">
                       <h4 className="font-semibold flex items-center gap-2 text-sm">
-                        <Send className="w-4 h-4 text-green-400" />
+                        <Send className="w-4 h-4 text-green-600" />
                         Send Message
                       </h4>
                       <form onSubmit={sendMessage} className="space-y-3">
@@ -614,14 +614,14 @@ export default function Dashboard() {
                           name="to"
                           placeholder="Phone number (e.g. 1234567890)"
                           required
-                          className="w-full px-4 py-3 bg-black/50 border border-gray-800 rounded-xl text-white placeholder-gray-600 focus:outline-none focus:border-green-500/50 transition text-sm"
+                          className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl text-gray-900 placeholder-gray-400 focus:outline-none focus:border-green-500/50 transition text-sm"
                         />
                         <textarea
                           name="message"
                           placeholder="Type your message..."
                           required
                           rows={3}
-                          className="w-full px-4 py-3 bg-black/50 border border-gray-800 rounded-xl text-white placeholder-gray-600 focus:outline-none focus:border-green-500/50 transition resize-none text-sm"
+                          className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl text-gray-900 placeholder-gray-400 focus:outline-none focus:border-green-500/50 transition resize-none text-sm"
                         />
                         <button
                           type="submit"
@@ -645,8 +645,8 @@ export default function Dashboard() {
                   )}
 
                   {/* Account ID */}
-                  <div className="pt-3 border-t border-gray-800">
-                    <p className="text-xs text-gray-600">Account ID</p>
+                  <div className="pt-3 border-t border-gray-200">
+                    <p className="text-xs text-gray-400">Account ID</p>
                     <p className="text-xs font-mono text-gray-500 truncate">{selectedAccount.id}</p>
                   </div>
                 </div>
