@@ -4,7 +4,7 @@
  */
 
 module.exports = function(io, dependencies) {
-  const { clients, prisma, getPrisma, isPrismaConnected, logger, messageQueues, enqueueMessage, processMessageQueue, initializeClient, cleanupClient } = dependencies;
+  const { clients, prisma, getPrisma, isPrismaConnected, logger, enqueueMessage, getSendQueueInfo, initializeClient, cleanupClient } = dependencies;
   const chatsNS = io.of('/chats');
 
   function sleep(ms) {
@@ -185,23 +185,18 @@ module.exports = function(io, dependencies) {
           }
         }
 
-        const queue = messageQueues.get(accountId) || [];
-        const queueLength = queue.length;
-
-        const messageId = enqueueMessage(accountId, decodedChatId, message, {
+        // Persistent per-account BullMQ queue (survives restarts, shares pacing with broadcasts)
+        const messageId = await enqueueMessage(accountId, decodedChatId, message, {
           chatId: decodedChatId,
         });
-
-        if (queueLength === 0) {
-          setTimeout(() => processMessageQueue(accountId), 100);
-        }
+        const info = await getSendQueueInfo(accountId);
 
         callback({
           success: true,
           queued: true,
           messageId,
-          queuePosition: queueLength + 1,
-          queueLength: queueLength + 1,
+          queuePosition: Math.max(1, info.counts.waiting),
+          queueLength: info.queueLength,
           message: 'Message queued for delivery',
         });
       } catch (error) {
@@ -258,18 +253,14 @@ module.exports = function(io, dependencies) {
           }
         }
 
-        const messageId = enqueueMessage(accountId, to, message);
-        const queue = messageQueues.get(accountId) || [];
-
-        if (queue.length === 1) {
-          setTimeout(() => processMessageQueue(accountId), 100);
-        }
+        const messageId = await enqueueMessage(accountId, to, message);
+        const info = await getSendQueueInfo(accountId);
 
         callback({
           success: true,
           queued: true,
           messageId,
-          queuePosition: queue.length,
+          queuePosition: Math.max(1, info.counts.waiting),
           message: 'Message queued for delivery',
         });
       } catch (error) {
@@ -281,20 +272,15 @@ module.exports = function(io, dependencies) {
     // Get queue status
     socket.on('queue:status', async ({ accountId }, callback) => {
       try {
-        const queue = messageQueues.get(accountId) || [];
+        const info = await getSendQueueInfo(accountId);
         const clientInfo = clients.get(accountId);
 
         callback({
           success: true,
           data: {
             accountId,
-            queueLength: queue.length,
-            messages: queue.slice(0, 20).map((msg, index) => ({
-              position: index + 1,
-              to: msg.to,
-              message: msg.message.substring(0, 50) + (msg.message.length > 50 ? '...' : ''),
-              retries: msg.retries,
-            })),
+            queueLength: info.queueLength,
+            messages: info.messages,
             status: {
               clientStatus: clientInfo?.status || 'DISCONNECTED',
             },
