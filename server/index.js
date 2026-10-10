@@ -1018,8 +1018,6 @@ async function initializeClient(accountId) {
     throw new Error("Client is already being initialized");
   }
 
-  logger.info(`Initializing client for ${accountId}`);
-
   let account;
   try {
     account = await prisma.whatsAppAccount.findUnique({
@@ -1037,6 +1035,8 @@ async function initializeClient(accountId) {
     }
     throw dbError;
   }
+
+  logger.info(`Initializing client for ${accountId}`);
 
   if (clients.has(accountId)) {
     const existing = clients.get(accountId);
