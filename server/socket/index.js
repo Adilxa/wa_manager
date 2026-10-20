@@ -14,6 +14,7 @@ async function initSocketIO(httpServer, dependencies) {
     enqueueMessage,
     processMessageQueue,
     messageQueues,
+    getSendQueueInfo,
     connectingAccounts,
     reconnectAttempts
   } = dependencies;
@@ -57,6 +58,7 @@ async function initSocketIO(httpServer, dependencies) {
     enqueueMessage,
     processMessageQueue,
     messageQueues,
+    getSendQueueInfo,
     connectingAccounts,
     reconnectAttempts
   };

@@ -1,10 +1,10 @@
-const { Queue, Worker, QueueEvents } = require("bullmq");
+const { Queue } = require("bullmq");
 const Redis = require("ioredis");
 
 // Redis connection configuration
 const redisConfig = {
   host: process.env.REDIS_HOST || "localhost",
-  port: process.env.REDIS_PORT || 6379,
+  port: Number(process.env.REDIS_PORT) || 6379,
   maxRetriesPerRequest: null,
   enableReadyCheck: false,
 };
@@ -14,59 +14,71 @@ if (process.env.REDIS_PASSWORD) {
   redisConfig.password = process.env.REDIS_PASSWORD;
 }
 
+// Shared non-blocking connection (queues, counters). Workers create their own blocking ones.
 const redisConnection = new Redis(redisConfig);
 
-// Create queue for contract processing
+// Contract queue: one job per started contract, fans recipients out to the per-account send queues
 const contractQueue = new Queue("contracts", {
   connection: redisConnection,
   defaultJobOptions: {
     attempts: 3,
-    backoff: {
-      type: "exponential",
-      delay: 5000,
-    },
-    removeOnComplete: {
-      age: 86400, // Keep completed jobs for 24 hours
-      count: 1000,
-    },
-    removeOnFail: {
-      age: 604800, // Keep failed jobs for 7 days
-    },
+    backoff: { type: "exponential", delay: 5000 },
+    removeOnComplete: true,
+    removeOnFail: { age: 604800 }, // Keep failed jobs for 7 days
   },
 });
 
-// Create queue for individual message sending
-const messageQueue = new Queue("messages", {
-  connection: redisConnection,
-  defaultJobOptions: {
-    attempts: 3,
-    backoff: {
-      type: "exponential",
-      delay: 2000,
-    },
-    removeOnComplete: {
-      age: 3600, // Keep for 1 hour
-      count: 10000,
-    },
-    removeOnFail: {
-      age: 86400, // Keep failed for 24 hours
-    },
-  },
-});
+// One send queue per WhatsApp account, so accounts send in parallel while each
+// account stays strictly sequential and keeps its own pacing / rate limit.
+const sendQueues = new Map();
 
-// Queue events for monitoring - create new connections without password warnings
-const contractQueueEvents = new QueueEvents("contracts", {
-  connection: redisConfig,
-});
+function sendQueueName(accountId) {
+  return `send_${accountId}`;
+}
 
-const messageQueueEvents = new QueueEvents("messages", {
-  connection: redisConfig,
-});
+function getSendQueue(accountId) {
+  let queue = sendQueues.get(accountId);
+  if (!queue) {
+    queue = new Queue(sendQueueName(accountId), {
+      connection: redisConnection,
+      defaultJobOptions: {
+        // Retries are handled per attempt in the worker; counters are only updated on the final one
+        attempts: 3,
+        backoff: { type: "exponential", delay: 5000 },
+        // Message state lives in Postgres; completed jobs are dropped so jobIds can be reused on resume
+        removeOnComplete: true,
+        removeOnFail: true,
+      },
+    });
+    sendQueues.set(accountId, queue);
+  }
+  return queue;
+}
+
+async function removeSendQueue(accountId) {
+  const queue = getSendQueue(accountId);
+  sendQueues.delete(accountId);
+  try {
+    await queue.obliterate({ force: true });
+  } finally {
+    await queue.close();
+  }
+}
+
+async function closeQueues() {
+  await Promise.allSettled([
+    contractQueue.close(),
+    ...Array.from(sendQueues.values()).map(q => q.close()),
+  ]);
+  await redisConnection.quit().catch(() => {});
+}
 
 module.exports = {
-  contractQueue,
-  messageQueue,
-  contractQueueEvents,
-  messageQueueEvents,
+  redisConfig,
   redisConnection,
+  contractQueue,
+  getSendQueue,
+  sendQueueName,
+  removeSendQueue,
+  closeQueues,
 };

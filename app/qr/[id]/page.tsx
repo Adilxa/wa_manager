@@ -172,13 +172,13 @@ export default function QRPage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-black flex items-center justify-center">
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
         <div className="flex flex-col items-center gap-4">
           <div className="relative">
             <div className="w-16 h-16 border-4 border-green-500/20 rounded-full"></div>
             <div className="absolute inset-0 w-16 h-16 border-4 border-transparent border-t-green-500 rounded-full animate-spin"></div>
           </div>
-          <p className="text-gray-400 text-sm">Loading...</p>
+          <p className="text-gray-600 text-sm">Loading...</p>
         </div>
       </div>
     );
@@ -186,12 +186,12 @@ export default function QRPage() {
 
   if (error || !account) {
     return (
-      <div className="min-h-screen bg-black flex items-center justify-center px-4">
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center px-4">
         <div className="text-center">
           <div className="w-20 h-20 rounded-2xl bg-red-500/10 flex items-center justify-center mx-auto mb-6">
-            <AlertCircle className="w-10 h-10 text-red-400" />
+            <AlertCircle className="w-10 h-10 text-red-600" />
           </div>
-          <h1 className="text-2xl font-bold text-white mb-2">Account Not Found</h1>
+          <h1 className="text-2xl font-bold text-gray-900 mb-2">Account Not Found</h1>
           <p className="text-gray-500">{error || 'This account does not exist'}</p>
         </div>
       </div>
@@ -199,7 +199,7 @@ export default function QRPage() {
   }
 
   return (
-    <div className="min-h-screen bg-black flex items-center justify-center px-4 relative overflow-hidden">
+    <div className="min-h-screen bg-gray-50 flex items-center justify-center px-4 relative overflow-hidden">
       {/* Background effects */}
       {isConnected && (
         <>
@@ -213,14 +213,14 @@ export default function QRPage() {
           {/* Header */}
           <div className="text-center mb-8">
             <div className={`inline-flex items-center justify-center w-16 h-16 rounded-2xl mb-4 transition-colors duration-500
-              ${isConnected ? 'bg-gradient-to-br from-green-500 to-emerald-600 shadow-lg shadow-green-500/20' : 'bg-gray-800'}`}>
+              ${isConnected ? 'bg-gradient-to-br from-green-500 to-emerald-600 shadow-lg shadow-green-500/20' : 'bg-gray-100'}`}>
               {isConnected ? (
                 <CheckCircle2 className="w-8 h-8 text-white" />
               ) : (
-                <MessageSquare className="w-8 h-8 text-gray-400" />
+                <MessageSquare className="w-8 h-8 text-gray-600" />
               )}
             </div>
-            <h1 className="text-2xl font-bold text-white mb-1">{account.name}</h1>
+            <h1 className="text-2xl font-bold text-gray-900 mb-1">{account.name}</h1>
             {account.phoneNumber && (
               <p className="text-gray-500">{account.phoneNumber}</p>
             )}
@@ -231,17 +231,17 @@ export default function QRPage() {
             {isConnected ? (
               <div className="flex items-center gap-2 px-4 py-2 bg-green-500/10 border border-green-500/30 rounded-xl">
                 <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
-                <span className="text-green-400 font-medium">Connected</span>
+                <span className="text-green-600 font-medium">Connected</span>
               </div>
             ) : hasQR ? (
               <div className="flex items-center gap-2 px-4 py-2 bg-amber-500/10 border border-amber-500/30 rounded-xl">
-                <QrCode className="w-4 h-4 text-amber-400" />
-                <span className="text-amber-400 font-medium">Scan QR Code</span>
+                <QrCode className="w-4 h-4 text-amber-600" />
+                <span className="text-amber-600 font-medium">Scan QR Code</span>
               </div>
             ) : (
               <div className="flex items-center gap-2 px-4 py-2 bg-blue-500/10 border border-blue-500/30 rounded-xl">
-                <Loader2 className="w-4 h-4 text-blue-400 animate-spin" />
-                <span className="text-blue-400 font-medium">Connecting...</span>
+                <Loader2 className="w-4 h-4 text-blue-600 animate-spin" />
+                <span className="text-blue-600 font-medium">Connecting...</span>
               </div>
             )}
           </div>
@@ -250,9 +250,9 @@ export default function QRPage() {
           {isConnected ? (
             <div className="text-center py-8">
               <div className="w-24 h-24 rounded-2xl bg-green-500/10 flex items-center justify-center mx-auto mb-6">
-                <CheckCircle2 className="w-12 h-12 text-green-400" />
+                <CheckCircle2 className="w-12 h-12 text-green-600" />
               </div>
-              <h2 className="text-xl font-bold text-white mb-2">WhatsApp Connected!</h2>
+              <h2 className="text-xl font-bold text-gray-900 mb-2">WhatsApp Connected!</h2>
               <p className="text-gray-500 text-sm">Your account is ready to use</p>
             </div>
           ) : hasQR && account.qrCode ? (
@@ -265,17 +265,17 @@ export default function QRPage() {
               </div>
 
               {/* Instructions */}
-              <div className="bg-black/30 rounded-xl p-4 space-y-3">
-                <div className="flex items-center gap-3 text-sm text-gray-400">
-                  <div className="w-6 h-6 rounded-lg bg-gray-800 flex items-center justify-center text-xs font-bold text-white">1</div>
+              <div className="bg-gray-50 rounded-xl p-4 space-y-3">
+                <div className="flex items-center gap-3 text-sm text-gray-600">
+                  <div className="w-6 h-6 rounded-lg bg-gray-100 flex items-center justify-center text-xs font-bold text-gray-900">1</div>
                   <span>Open WhatsApp on your phone</span>
                 </div>
-                <div className="flex items-center gap-3 text-sm text-gray-400">
-                  <div className="w-6 h-6 rounded-lg bg-gray-800 flex items-center justify-center text-xs font-bold text-white">2</div>
+                <div className="flex items-center gap-3 text-sm text-gray-600">
+                  <div className="w-6 h-6 rounded-lg bg-gray-100 flex items-center justify-center text-xs font-bold text-gray-900">2</div>
                   <span>Go to Settings &rarr; Linked Devices</span>
                 </div>
-                <div className="flex items-center gap-3 text-sm text-gray-400">
-                  <div className="w-6 h-6 rounded-lg bg-gray-800 flex items-center justify-center text-xs font-bold text-white">3</div>
+                <div className="flex items-center gap-3 text-sm text-gray-600">
+                  <div className="w-6 h-6 rounded-lg bg-gray-100 flex items-center justify-center text-xs font-bold text-gray-900">3</div>
                   <span>Tap "Link a Device" and scan this code</span>
                 </div>
               </div>
@@ -284,7 +284,7 @@ export default function QRPage() {
               <button
                 onClick={regenerateQR}
                 disabled={regenerating}
-                className="w-full py-3 bg-gray-800 hover:bg-gray-700 text-white rounded-xl font-medium transition flex items-center justify-center gap-2 disabled:opacity-50"
+                className="w-full py-3 bg-gray-100 hover:bg-gray-200 text-gray-900 rounded-xl font-medium transition flex items-center justify-center gap-2 disabled:opacity-50"
               >
                 <RefreshCw className={`w-4 h-4 ${regenerating ? 'animate-spin' : ''}`} />
                 {regenerating ? 'Refreshing...' : 'Refresh QR Code'}
@@ -292,10 +292,10 @@ export default function QRPage() {
             </div>
           ) : (
             <div className="text-center py-8">
-              <div className="w-24 h-24 rounded-2xl bg-gray-800/50 flex items-center justify-center mx-auto mb-6">
-                <Loader2 className="w-12 h-12 text-gray-400 animate-spin" />
+              <div className="w-24 h-24 rounded-2xl bg-gray-50 flex items-center justify-center mx-auto mb-6">
+                <Loader2 className="w-12 h-12 text-gray-600 animate-spin" />
               </div>
-              <h2 className="text-xl font-bold text-white mb-2">Initializing...</h2>
+              <h2 className="text-xl font-bold text-gray-900 mb-2">Initializing...</h2>
               <p className="text-gray-500 text-sm">Please wait while we establish connection</p>
             </div>
           )}
@@ -303,7 +303,7 @@ export default function QRPage() {
 
         {/* Footer */}
         <div className="text-center mt-6">
-          <p className="text-gray-600 text-xs">OCTO WhatsApp Manager</p>
+          <p className="text-gray-400 text-xs">OCTO WhatsApp Manager</p>
         </div>
       </div>
     </div>

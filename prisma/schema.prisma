@@ -38,12 +38,15 @@ model Message {
   status         MessageStatus    @default(PENDING)
   contactName    String?
   contactNumber  String?
+  waMessageId    String?          // WhatsApp message key id (dedup + delivery status)
 
   sentAt         DateTime         @default(now())
   updatedAt      DateTime         @updatedAt
 
   @@index([accountId])
+  @@unique([accountId, waMessageId])
   @@index([accountId, chatId])
+  @@index([accountId, sentAt])
   @@index([status])
   @@index([sentAt])
   @@index([to])
@@ -119,6 +122,7 @@ model ContractRecipient {
   updatedAt   DateTime            @updatedAt
 
   @@index([contractId])
+  @@index([contractId, status])
   @@index([status])
   @@index([phoneNumber])
   @@map("contract_recipients")

@@ -27,7 +27,7 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen bg-black flex items-center justify-center px-4 relative overflow-hidden">
+    <div className="min-h-screen bg-gray-50 flex items-center justify-center px-4 relative overflow-hidden">
       {/* Background gradient */}
       <div className="absolute inset-0 bg-gradient-to-br from-green-500/5 via-transparent to-emerald-500/5" />
       <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[500px] h-[500px] bg-green-500/10 rounded-full blur-3xl" />
@@ -53,12 +53,12 @@ export default function LoginPage() {
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="Enter password"
-                  className="w-full pl-12 pr-4 py-4 bg-black/50 border border-gray-800 rounded-xl text-white placeholder-gray-600 focus:outline-none focus:border-green-500/50 transition"
+                  className="w-full pl-12 pr-4 py-4 bg-gray-50 border border-gray-200 rounded-xl text-gray-900 placeholder-gray-400 focus:outline-none focus:border-green-500/50 transition"
                   autoFocus
                 />
               </div>
               {error && (
-                <p className="text-red-400 text-sm flex items-center gap-2 px-1">
+                <p className="text-red-600 text-sm flex items-center gap-2 px-1">
                   <Shield className="w-4 h-4" />
                   {error}
                 </p>
@@ -85,7 +85,7 @@ export default function LoginPage() {
           </form>
 
           {/* Footer */}
-          <p className="text-center text-gray-600 text-xs mt-6">
+          <p className="text-center text-gray-400 text-xs mt-6">
             Secure access to your WhatsApp accounts
           </p>
         </div>

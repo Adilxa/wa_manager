@@ -134,8 +134,8 @@ services:
     env_file:
       - .env.production
     environment:
-      # Prisma connection pool: 10 connections (reduced to save memory)
-      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/wa_manager?schema=public&connection_limit=10&pool_timeout=10&connect_timeout=30
+      # Prisma connection pool per process client (API + send workers)
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/wa_manager?schema=public&connection_limit=15&pool_timeout=20&connect_timeout=30
       DIRECT_URL: postgresql://postgres:postgres@postgres:5432/wa_manager?schema=public
       REDIS_HOST: redis
       REDIS_PORT: 6379
@@ -148,13 +148,15 @@ services:
       NODE_ENV: production
       # Enable Node.js optimizations
       UV_THREADPOOL_SIZE: 4
-      API_MAX_MEMORY_RESTART: ${API_MAX_MEMORY_RESTART:-10G}
-      API_NODE_MAX_OLD_SPACE_SIZE: ${API_NODE_MAX_OLD_SPACE_SIZE:-9216}
-      API_MEMORY_LIMIT_MB: ${API_MEMORY_LIMIT_MB:-9216}
+      # Host has 7.8G RAM, no swap, and other services: keep the heap well below physical memory
+      API_MAX_MEMORY_RESTART: ${API_MAX_MEMORY_RESTART:-3500M}
+      API_NODE_MAX_OLD_SPACE_SIZE: ${API_NODE_MAX_OLD_SPACE_SIZE:-3072}
+      API_MEMORY_LIMIT_MB: ${API_MEMORY_LIMIT_MB:-3072}
       NEXTJS_MAX_MEMORY_RESTART: ${NEXTJS_MAX_MEMORY_RESTART:-768M}
       NEXTJS_NODE_MAX_OLD_SPACE_SIZE: ${NEXTJS_NODE_MAX_OLD_SPACE_SIZE:-512}
-      RESTORE_CONNECTED_CLIENTS: ${RESTORE_CONNECTED_CLIENTS:-false}
-      RESTORE_CONNECTED_CLIENTS_LIMIT: ${RESTORE_CONNECTED_CLIENTS_LIMIT:-5}
+      # Reconnect WhatsApp sessions after a restart so queued broadcasts keep going
+      RESTORE_CONNECTED_CLIENTS: ${RESTORE_CONNECTED_CLIENTS:-true}
+      RESTORE_CONNECTED_CLIENTS_LIMIT: ${RESTORE_CONNECTED_CLIENTS_LIMIT:-50}
       START_QUEUE_WORKERS: "true"
       ENABLE_WHATSAPP_CLIENTS: ${ENABLE_WHATSAPP_CLIENTS:-false}
       DB_CONNECT_TIMEOUT_MS: ${DB_CONNECT_TIMEOUT_MS:-20000}
@@ -175,10 +177,15 @@ services:
       - "traefik.http.routers.wa-api.service=wa-api"
       - "traefik.http.services.wa-api.loadbalancer.server.port=5001"
       - "traefik.http.services.wa-api.loadbalancer.sticky.cookie.name=server_id"
-    mem_limit: ${WA_MANAGER_MEMORY_LIMIT:-12g}
+    mem_limit: ${WA_MANAGER_MEMORY_LIMIT:-4g}
     volumes:
       - ./server/start-production.js:/app/server/start-production.js:ro
       - ./server/index.js:/app/server/index.js:ro
+      - ./server/workers.js:/app/server/workers.js:ro
+      - ./server/queue.js:/app/server/queue.js:ro
+      - ./server/limits.js:/app/server/limits.js:ro
+      - ./server/config.js:/app/server/config.js:ro
+      - ./server/db.js:/app/server/db.js:ro
       - ./server/socket/index.js:/app/server/socket/index.js:ro
       - ./server/socket/namespaces/accounts.js:/app/server/socket/namespaces/accounts.js:ro
       - ./server/socket/namespaces/chats.js:/app/server/socket/namespaces/chats.js:ro
@@ -211,10 +218,10 @@ services:
       resources:
         limits:
           cpus: "${WA_MANAGER_CPU_LIMIT:-4.0}"
-          memory: ${WA_MANAGER_MEMORY_LIMIT:-12G}
+          memory: ${WA_MANAGER_MEMORY_LIMIT:-4G}
         reservations:
           cpus: "0.5"
-          memory: ${WA_MANAGER_MEMORY_RESERVATION:-4096M}
+          memory: ${WA_MANAGER_MEMORY_RESERVATION:-1024M}
       # Политика перезапуска при сбое
       restart_policy:
         condition: on-failure
